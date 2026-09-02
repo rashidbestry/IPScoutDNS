@@ -1,1 +1,1 @@
-# dns-ip-selector
+# dns-ipselector

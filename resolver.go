@@ -70,7 +70,7 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 		}
 
 		logger.Printf("%s: cached IP FAILED: %s", domain, entry.IP)
-		recordHost(currentConfig.UnreachableHostsFile, domain, entry.IP, false)
+		recordUnreachableHost(domain, entry.IP)
 		deleteCache(domain)
 	}
 
@@ -99,6 +99,7 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 	}
 
 	logger.Printf("%s: NO WORKING IP FOUND - DNS fallback", domain)
+	recordDomainUnreachable(domain)
 	forwardDNS(w, req, currentConfig.FallbackDNS)
 }
 
@@ -213,16 +214,21 @@ func resolvePhase(domain string, servers []string, throughSOCKS bool, cfg Config
 					if !ok {
 						return
 					}
+					if ctx.Err() != nil {
+						return
+					}
 					logger.Printf("%s: testing %s", domain, ip)
 					if testIP(ctx, domain, ip) {
+						markDomainResolved(domain)
 						recordHost(currentConfig.ReachableHostsFile, domain, ip, true)
+						cancel()
 						select {
 						case results <- result{ip: ip, ok: true}:
 						case <-ctx.Done():
 						}
 						return
 					}
-					recordHost(currentConfig.UnreachableHostsFile, domain, ip, false)
+					recordUnreachableHost(domain, ip)
 					logger.Printf("%s: %s FAILED", domain, ip)
 				}
 			}

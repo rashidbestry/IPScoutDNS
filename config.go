@@ -29,25 +29,27 @@ const (
 )
 
 type Config struct {
-	DirectDNS            []string
-	ProxyDNS             []string
-	ListenAddr           string
-	FallbackDNS          string
-	SOCKS5Addr           string // legacy alias for DNSSOCKS5Addr
-	DNSSOCKS5Addr        string // SOCKS5 proxy used for DNS resolvers
-	TLSSOCKS5Addr        string // SOCKS5 proxy used for TLS reachability checks
-	TLSProxyPort         int
-	CacheTTL             time.Duration
-	DNSTimeout           time.Duration
-	TLSTimeout           time.Duration
-	TLSPort              int
-	TLSRoute             string
-	MaxParallelTests     int
-	AnswerTTL            uint32
-	ShutdownTimeout      time.Duration
-	ReachableHostsFile   string
-	UnreachableHostsFile string
-	DomainsFile          string
+	DirectDNS              []string
+	ProxyDNS               []string
+	ListenAddr             string
+	FallbackDNS            string
+	SOCKS5Addr             string // legacy alias for DNSSOCKS5Addr
+	DNSSOCKS5Addr          string // SOCKS5 proxy used for DNS resolvers
+	TLSSOCKS5Addr          string // SOCKS5 proxy used for TLS reachability checks
+	TLSProxyPort           int
+	CacheTTL               time.Duration
+	DNSTimeout             time.Duration
+	TLSTimeout             time.Duration
+	TLSPort                int
+	TLSRoute               string
+	MaxParallelTests       int
+	AnswerTTL              uint32
+	ShutdownTimeout        time.Duration
+	ReachableHostsFile     string
+	UnreachableHostsFile   string
+	UnreachableDomainsFile string
+	UnreachableIPsFile     string
+	DomainsFile            string
 }
 
 func (c Config) validate() error {
@@ -182,7 +184,7 @@ func loadConfig(path string) (Config, error) {
 			cfg.DirectDNS = append(cfg.DirectDNS, line)
 		case "proxy_dns":
 			cfg.ProxyDNS = append(cfg.ProxyDNS, line)
-		case "socks5", "dns_proxy", "dns_socks5", "tls_proxy", "tls_socks5", "fallback", "cache", "server":
+		case "socks5", "dns_proxy", "dns_resolve_proxy", "dns_socks5", "tls_proxy", "tls_socks5", "fallback", "fallback_dns", "cache", "server":
 			key, value, ok := strings.Cut(line, "=")
 			if !ok {
 				return cfg, fmt.Errorf("%s:%d: expected key=value", path, lineNo)
@@ -216,7 +218,7 @@ func loadConfig(path string) (Config, error) {
 					}
 					rawTLSProxyPort = value
 				}
-			case "dns_proxy", "dns_socks5":
+			case "dns_proxy", "dns_resolve_proxy", "dns_socks5":
 				switch key {
 				case "address":
 					rawDNSProxyAddr = value
@@ -238,7 +240,7 @@ func loadConfig(path string) (Config, error) {
 					}
 					rawTLSProxyPort = value
 				}
-			case "fallback":
+			case "fallback", "fallback_dns":
 				if key == "address" {
 					cfg.FallbackDNS = value
 				}
@@ -316,6 +318,10 @@ func loadConfig(path string) (Config, error) {
 					cfg.ReachableHostsFile = value
 				case "unreachable_hosts":
 					cfg.UnreachableHostsFile = value
+				case "unreachable_domains_file", "unreachable_domains":
+					cfg.UnreachableDomainsFile = value
+				case "unreachable_ips_file", "unreachable_ips":
+					cfg.UnreachableIPsFile = value
 				case "domains_file":
 					cfg.DomainsFile = value
 				}

@@ -1,1 +1,1 @@
-.* #resolve all domains
+.* #all domains

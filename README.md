@@ -9,7 +9,7 @@ IPScoutDNS is a local DNS proxy that resolves A-record queries by selecting an I
 - optionally uses a SOCKS5 tunnel for proxy resolvers
 - tests candidate IPv4 addresses with a TLS handshake to port 443
 - caches successful IP choices and revalidates expired entries
-- falls back to AdGuard when no usable IP is found
+- falls back to a configured DNS server when no usable IP is found
 
 ## Configuration
 
@@ -32,7 +32,7 @@ address=127.0.0.1:1080
 [cache]
 ttl=24h
 
-[adguard]
+[fallback]
 address=127.0.0.1:53053
 
 [server]

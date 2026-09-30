@@ -11,15 +11,17 @@ import (
 )
 
 const (
-	defaultConfigPath = "/etc/ipscoutdns.conf"
-	legacyConfigPath  = "/etc/ipselector.conf"
+	defaultConfigPath  = "/etc/ipscoutdns.conf"
+	priorityConfigPath = "ipscoutdns.conf"
 
 	defaultListenAddr   = "127.0.0.1:5354"
-	defaultAdguardDNS   = "127.0.0.1:53053"
+	defaultFallbackDNS  = "127.0.0.1:53053"
 	defaultSOCKS5Addr   = "127.0.0.1:1080"
 	defaultCacheTTL     = 24 * time.Hour
 	defaultDNSTimeout   = 3 * time.Second
 	defaultTLSTimeout   = 3 * time.Second
+	defaultTLSPort      = 443
+	defaultTLSRoute     = "direct"
 	defaultMaxParallel  = 16
 	defaultAnswerTTL    = uint32(300)
 	defaultShutdownTime = 5 * time.Second
@@ -29,14 +31,19 @@ type Config struct {
 	DirectDNS        []string
 	ProxyDNS         []string
 	ListenAddr       string
-	AdguardDNS       string
+	FallbackDNS      string
 	SOCKS5Addr       string
 	CacheTTL         time.Duration
 	DNSTimeout       time.Duration
 	TLSTimeout       time.Duration
-	MaxParallelTests int
-	AnswerTTL        uint32
-	ShutdownTimeout  time.Duration
+	TLSPort          int
+	TLSRoute         string
+	MaxParallelTests     int
+	AnswerTTL            uint32
+	ShutdownTimeout      time.Duration
+	ReachableHostsFile   string
+	UnreachableHostsFile string
+	DomainsFile          string
 }
 
 func (c Config) validate() error {
@@ -49,11 +56,11 @@ func (c Config) validate() error {
 	if _, _, err := net.SplitHostPort(c.ListenAddr); err != nil {
 		return fmt.Errorf("server.address must be host:port: %w", err)
 	}
-	if strings.TrimSpace(c.AdguardDNS) == "" {
-		return fmt.Errorf("adguard.address cannot be empty")
+	if strings.TrimSpace(c.FallbackDNS) == "" {
+		return fmt.Errorf("fallback.address cannot be empty")
 	}
-	if _, _, err := net.SplitHostPort(c.AdguardDNS); err != nil {
-		return fmt.Errorf("adguard.address must be host:port: %w", err)
+	if _, _, err := net.SplitHostPort(c.FallbackDNS); err != nil {
+		return fmt.Errorf("fallback.address must be host:port: %w", err)
 	}
 	if strings.TrimSpace(c.SOCKS5Addr) != "" {
 		if _, _, err := net.SplitHostPort(c.SOCKS5Addr); err != nil {
@@ -68,6 +75,15 @@ func (c Config) validate() error {
 	}
 	if c.TLSTimeout <= 0 {
 		return fmt.Errorf("server.tls_timeout must be greater than zero")
+	}
+	if c.TLSPort <= 0 || c.TLSPort > 65535 {
+		return fmt.Errorf("server.tls_port must be a valid port number")
+	}
+	if c.TLSRoute != "direct" && c.TLSRoute != "proxy" {
+		return fmt.Errorf("server.tls_route must be either direct or proxy")
+	}
+	if c.TLSRoute == "proxy" && strings.TrimSpace(c.SOCKS5Addr) == "" {
+		return fmt.Errorf("server.tls_route is proxy but socks5 address is empty")
 	}
 	if c.MaxParallelTests <= 0 {
 		return fmt.Errorf("server.parallel_tests must be greater than zero")
@@ -98,11 +114,11 @@ func resolveConfigPath() string {
 	if value := strings.TrimSpace(os.Getenv("IPSELECTOR_CONFIG")); value != "" {
 		return value
 	}
+	if _, err := os.Stat(priorityConfigPath); err == nil {
+		return priorityConfigPath
+	}
 	if _, err := os.Stat(defaultConfigPath); err == nil {
 		return defaultConfigPath
-	}
-	if _, err := os.Stat(legacyConfigPath); err == nil {
-		return legacyConfigPath
 	}
 	return defaultConfigPath
 }
@@ -110,11 +126,13 @@ func resolveConfigPath() string {
 func loadConfig(path string) (Config, error) {
 	cfg := Config{
 		ListenAddr:       defaultListenAddr,
-		AdguardDNS:       defaultAdguardDNS,
+		FallbackDNS:      defaultFallbackDNS,
 		SOCKS5Addr:       defaultSOCKS5Addr,
 		CacheTTL:         defaultCacheTTL,
 		DNSTimeout:       defaultDNSTimeout,
 		TLSTimeout:       defaultTLSTimeout,
+		TLSPort:          defaultTLSPort,
+		TLSRoute:         defaultTLSRoute,
 		MaxParallelTests: defaultMaxParallel,
 		AnswerTTL:        defaultAnswerTTL,
 		ShutdownTimeout:  defaultShutdownTime,
@@ -145,7 +163,7 @@ func loadConfig(path string) (Config, error) {
 			cfg.DirectDNS = append(cfg.DirectDNS, line)
 		case "proxy_dns":
 			cfg.ProxyDNS = append(cfg.ProxyDNS, line)
-		case "socks5", "adguard", "cache", "server":
+		case "socks5", "fallback", "cache", "server":
 			key, value, ok := strings.Cut(line, "=")
 			if !ok {
 				return cfg, fmt.Errorf("%s:%d: expected key=value", path, lineNo)
@@ -156,9 +174,9 @@ func loadConfig(path string) (Config, error) {
 				if key == "address" {
 					cfg.SOCKS5Addr = value
 				}
-			case "adguard":
+			case "fallback":
 				if key == "address" {
-					cfg.AdguardDNS = value
+					cfg.FallbackDNS = value
 				}
 			case "cache":
 				switch key {
@@ -185,6 +203,17 @@ func loadConfig(path string) (Config, error) {
 						return cfg, fmt.Errorf("%s:%d: invalid tls timeout %q", path, lineNo, value)
 					}
 					cfg.TLSTimeout = d
+				case "tls_port":
+					v, err := strconv.Atoi(value)
+					if err != nil || v <= 0 || v > 65535 {
+						return cfg, fmt.Errorf("%s:%d: invalid tls port %q", path, lineNo, value)
+					}
+					cfg.TLSPort = v
+				case "tls_route":
+					if value != "direct" && value != "proxy" {
+						return cfg, fmt.Errorf("%s:%d: invalid tls route %q", path, lineNo, value)
+					}
+					cfg.TLSRoute = value
 				case "parallel_tests", "max_parallel_tests":
 					v, err := strconv.Atoi(value)
 					if err != nil || v <= 0 {
@@ -203,7 +232,15 @@ func loadConfig(path string) (Config, error) {
 						return cfg, fmt.Errorf("%s:%d: invalid shutdown timeout %q", path, lineNo, value)
 					}
 					cfg.ShutdownTimeout = d
+				case "reachable_hosts":
+					cfg.ReachableHostsFile = value
+				case "unreachable_hosts":
+					cfg.UnreachableHostsFile = value
+				case "domains_file":
+					cfg.DomainsFile = value
 				}
+
+
 			}
 		default:
 			return cfg, fmt.Errorf("%s:%d: setting outside a known section", path, lineNo)

@@ -16,6 +16,18 @@ import (
 	"github.com/miekg/dns"
 )
 
+func isDomainAllowed(domain string) bool {
+	if currentConfig.DomainsFile == "" && len(domainRegexes) == 0 {
+		return true
+	}
+	for _, re := range domainRegexes {
+		if re.MatchString(domain) {
+			return true
+		}
+	}
+	return false
+}
+
 func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 	if len(req.Question) == 0 {
 		dns.HandleFailed(w, req)
@@ -24,13 +36,21 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 
 	q := req.Question[0]
 	domain := strings.TrimSuffix(strings.ToLower(q.Name), ".")
+	qtype := dns.TypeToString[q.Qtype]
+
+	logger.Printf("request: %s [%s] from %s", domain, qtype, w.RemoteAddr())
 
 	if q.Qtype != dns.TypeA {
-		forwardDNS(w, req, currentConfig.AdguardDNS)
+		logger.Printf("%s: not an A record query (%s), forwarding to fallback", domain, qtype)
+		forwardDNS(w, req, currentConfig.FallbackDNS)
 		return
 	}
 
-	logger.Printf("request: %s from %s", domain, w.RemoteAddr())
+	if !isDomainAllowed(domain) {
+		logger.Printf("%s: domain not in allowed list, forwarding to fallback", domain)
+		forwardDNS(w, req, currentConfig.FallbackDNS)
+		return
+	}
 
 	if entry, ok := getCache(domain); ok {
 		age := time.Since(entry.Checked)
@@ -43,12 +63,14 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 		logger.Printf("%s: cached IP expired: %s", domain, entry.IP)
 		if testCachedIP(domain, entry.IP) {
 			logger.Printf("%s: cached IP still reachable: %s", domain, entry.IP)
+			recordHost(currentConfig.ReachableHostsFile, domain, entry.IP, true)
 			updateCache(domain, entry.IP)
 			replyIP(w, req, entry.IP)
 			return
 		}
 
 		logger.Printf("%s: cached IP FAILED: %s", domain, entry.IP)
+		recordHost(currentConfig.UnreachableHostsFile, domain, entry.IP, false)
 		deleteCache(domain)
 	}
 
@@ -59,7 +81,7 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 			replyIP(w, req, f.ip)
 			return
 		}
-		forwardDNS(w, req, currentConfig.AdguardDNS)
+		forwardDNS(w, req, currentConfig.FallbackDNS)
 		return
 	}
 
@@ -76,8 +98,8 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	logger.Printf("%s: NO WORKING IP FOUND - AdGuard fallback", domain)
-	forwardDNS(w, req, currentConfig.AdguardDNS)
+	logger.Printf("%s: NO WORKING IP FOUND - DNS fallback", domain)
+	forwardDNS(w, req, currentConfig.FallbackDNS)
 }
 
 func resolveAndSelect(domain string, cfg Config) (string, bool) {
@@ -126,10 +148,15 @@ func resolvePhase(domain string, servers []string, throughSOCKS bool, cfg Config
 				} else {
 					logger.Printf("%s: ignoring DoH resolver in direct DNS section: %s", domain, server)
 				}
-			} else if throughSOCKS {
-				ips = queryDNSSOCKS5(ctx, domain, cfg.SOCKS5Addr, server)
 			} else {
-				ips = queryDNS(ctx, domain, server)
+				if _, _, err := net.SplitHostPort(server); err != nil {
+					server = net.JoinHostPort(server, "53")
+				}
+				if throughSOCKS {
+					ips = queryDNSSOCKS5(ctx, domain, cfg.SOCKS5Addr, server)
+				} else {
+					ips = queryDNS(ctx, domain, server)
+				}
 			}
 
 			if len(ips) == 0 {
@@ -188,12 +215,14 @@ func resolvePhase(domain string, servers []string, throughSOCKS bool, cfg Config
 					}
 					logger.Printf("%s: testing %s", domain, ip)
 					if testIP(ctx, domain, ip) {
+						recordHost(currentConfig.ReachableHostsFile, domain, ip, true)
 						select {
 						case results <- result{ip: ip, ok: true}:
 						case <-ctx.Done():
 						}
 						return
 					}
+					recordHost(currentConfig.UnreachableHostsFile, domain, ip, false)
 					logger.Printf("%s: %s FAILED", domain, ip)
 				}
 			}
@@ -400,6 +429,7 @@ func forwardDNS(w dns.ResponseWriter, req *dns.Msg, server string) {
 	client := &dns.Client{Timeout: timeout}
 	resp, _, err := client.ExchangeContext(ctx, req, server)
 	if err != nil {
+		logger.Printf("forward DNS to %s failed: %v", server, err)
 		dns.HandleFailed(w, req)
 		return
 	}

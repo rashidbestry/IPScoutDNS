@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"strconv"
 )
 
 func testIP(parent context.Context, domain string, ip string) bool {
@@ -15,16 +16,41 @@ func testIP(parent context.Context, domain string, ip string) bool {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{},
-		Config: &tls.Config{
-			ServerName:         domain,
-			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: true,
-		},
+	port := strconv.Itoa(currentConfig.TLSPort)
+	if currentConfig.TLSPort == 0 {
+		port = "443"
 	}
 
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip, "443"))
+	tlsConfig := &tls.Config{
+		ServerName:         domain,
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true,
+	}
+
+	var conn net.Conn
+	var err error
+	
+	targetAddr := net.JoinHostPort(ip, port)
+
+	if currentConfig.TLSRoute == "proxy" {
+		conn, err = dialSOCKS5(ctx, currentConfig.SOCKS5Addr, targetAddr)
+		if err == nil {
+			tlsConn := tls.Client(conn, tlsConfig)
+			err = tlsConn.HandshakeContext(ctx)
+			if err != nil {
+				conn.Close()
+			} else {
+				conn = tlsConn
+			}
+		}
+	} else {
+		dialer := &tls.Dialer{
+			NetDialer: &net.Dialer{},
+			Config:    tlsConfig,
+		}
+		conn, err = dialer.DialContext(ctx, "tcp", targetAddr)
+	}
+
 	if err != nil {
 		return false
 	}

@@ -187,7 +187,13 @@ func loadConfig(path string) (Config, error) {
 		case "socks5", "dns_proxy", "dns_resolve_proxy", "dns_socks5", "tls_proxy", "tls_socks5", "fallback", "fallback_dns", "cache", "server":
 			key, value, ok := strings.Cut(line, "=")
 			if !ok {
-				return cfg, fmt.Errorf("%s:%d: expected key=value", path, lineNo)
+				switch section {
+				case "fallback", "fallback_dns":
+					cfg.FallbackDNS = strings.TrimSpace(line)
+					continue
+				default:
+					return cfg, fmt.Errorf("%s:%d: expected key=value", path, lineNo)
+				}
 			}
 			key, value = strings.ToLower(strings.TrimSpace(key)), strings.TrimSpace(value)
 			switch section {
@@ -255,6 +261,12 @@ func loadConfig(path string) (Config, error) {
 				}
 			case "server":
 				switch key {
+				case "ttl":
+					d, err := time.ParseDuration(value)
+					if err != nil || d <= 0 {
+						return cfg, fmt.Errorf("%s:%d: invalid cache ttl %q", path, lineNo, value)
+					}
+					cfg.CacheTTL = d
 				case "address":
 					cfg.ListenAddr = value
 				case "dns_timeout":

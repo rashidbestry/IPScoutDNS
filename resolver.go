@@ -16,14 +16,6 @@ import (
 	"github.com/miekg/dns"
 )
 
-const (
-	dnsTimeout = 3 * time.Second
-
-	maxParallelTests = 16
-
-	answerTTL uint32 = 300
-)
-
 func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 	if len(req.Question) == 0 {
 		dns.HandleFailed(w, req)
@@ -174,10 +166,15 @@ func resolvePhase(domain string, servers []string, throughSOCKS bool, cfg Config
 		ip string
 		ok bool
 	}
-	results := make(chan result, maxParallelTests)
+	parallel := currentConfig.MaxParallelTests
+	if parallel <= 0 {
+		parallel = defaultMaxParallel
+	}
+
+	results := make(chan result, parallel)
 	var workerWG sync.WaitGroup
 
-	for i := 0; i < maxParallelTests; i++ {
+	for i := 0; i < parallel; i++ {
 		workerWG.Add(1)
 		go func() {
 			defer workerWG.Done()
@@ -225,7 +222,12 @@ func queryDNS(ctx context.Context, domain string, server string) []string {
 	msg.SetQuestion(dns.Fqdn(domain), dns.TypeA)
 	msg.RecursionDesired = true
 
-	client := &dns.Client{Timeout: dnsTimeout}
+	timeout := currentConfig.DNSTimeout
+	if timeout <= 0 {
+		timeout = defaultDNSTimeout
+	}
+
+	client := &dns.Client{Timeout: timeout}
 	resp, _, err := client.ExchangeContext(ctx, msg, server)
 	if err != nil {
 		return nil
@@ -314,7 +316,12 @@ func queryDoHSOCKS5(ctx context.Context, domain, endpoint, socksAddr string) []s
 	}
 	defer transport.CloseIdleConnections()
 
-	client := &http.Client{Transport: transport, Timeout: dnsTimeout}
+	timeout := currentConfig.DNSTimeout
+	if timeout <= 0 {
+		timeout = defaultDNSTimeout
+	}
+
+	client := &http.Client{Transport: transport, Timeout: timeout}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(wire))
 	if err != nil {
 		return nil
@@ -365,6 +372,11 @@ func replyIP(w dns.ResponseWriter, req *dns.Msg, ip string) {
 		return
 	}
 
+	answerTTL := currentConfig.AnswerTTL
+	if answerTTL == 0 {
+		answerTTL = defaultAnswerTTL
+	}
+
 	rr := &dns.A{
 		Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: answerTTL},
 		A:   parsed,
@@ -377,10 +389,15 @@ func replyIP(w dns.ResponseWriter, req *dns.Msg, ip string) {
 }
 
 func forwardDNS(w dns.ResponseWriter, req *dns.Msg, server string) {
-	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
+	timeout := currentConfig.DNSTimeout
+	if timeout <= 0 {
+		timeout = defaultDNSTimeout
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	client := &dns.Client{Timeout: dnsTimeout}
+	client := &dns.Client{Timeout: timeout}
 	resp, _, err := client.ExchangeContext(ctx, req, server)
 	if err != nil {
 		dns.HandleFailed(w, req)

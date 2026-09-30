@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -13,19 +14,29 @@ const (
 	defaultConfigPath = "/etc/ipscoutdns.conf"
 	legacyConfigPath  = "/etc/ipselector.conf"
 
-	defaultListenAddr = "127.0.0.1:5354"
-	defaultAdguardDNS = "127.0.0.1:53053"
-	defaultSOCKS5Addr = "127.0.0.1:1080"
-	defaultCacheTTL   = 24 * time.Hour
+	defaultListenAddr   = "127.0.0.1:5354"
+	defaultAdguardDNS   = "127.0.0.1:53053"
+	defaultSOCKS5Addr   = "127.0.0.1:1080"
+	defaultCacheTTL     = 24 * time.Hour
+	defaultDNSTimeout   = 3 * time.Second
+	defaultTLSTimeout   = 3 * time.Second
+	defaultMaxParallel  = 16
+	defaultAnswerTTL    = uint32(300)
+	defaultShutdownTime = 5 * time.Second
 )
 
 type Config struct {
-	DirectDNS  []string
-	ProxyDNS   []string
-	ListenAddr string
-	AdguardDNS string
-	SOCKS5Addr string
-	CacheTTL   time.Duration
+	DirectDNS        []string
+	ProxyDNS         []string
+	ListenAddr       string
+	AdguardDNS       string
+	SOCKS5Addr       string
+	CacheTTL         time.Duration
+	DNSTimeout       time.Duration
+	TLSTimeout       time.Duration
+	MaxParallelTests int
+	AnswerTTL        uint32
+	ShutdownTimeout  time.Duration
 }
 
 func (c Config) validate() error {
@@ -51,6 +62,21 @@ func (c Config) validate() error {
 	}
 	if c.CacheTTL <= 0 {
 		return fmt.Errorf("cache.ttl must be greater than zero")
+	}
+	if c.DNSTimeout <= 0 {
+		return fmt.Errorf("server.dns_timeout must be greater than zero")
+	}
+	if c.TLSTimeout <= 0 {
+		return fmt.Errorf("server.tls_timeout must be greater than zero")
+	}
+	if c.MaxParallelTests <= 0 {
+		return fmt.Errorf("server.parallel_tests must be greater than zero")
+	}
+	if c.AnswerTTL <= 0 {
+		return fmt.Errorf("server.answer_ttl must be greater than zero")
+	}
+	if c.ShutdownTimeout <= 0 {
+		return fmt.Errorf("server.shutdown_timeout must be greater than zero")
 	}
 	for _, v := range c.DirectDNS {
 		if strings.TrimSpace(v) == "" {
@@ -83,10 +109,15 @@ func resolveConfigPath() string {
 
 func loadConfig(path string) (Config, error) {
 	cfg := Config{
-		ListenAddr: defaultListenAddr,
-		AdguardDNS: defaultAdguardDNS,
-		SOCKS5Addr: defaultSOCKS5Addr,
-		CacheTTL:   defaultCacheTTL,
+		ListenAddr:       defaultListenAddr,
+		AdguardDNS:       defaultAdguardDNS,
+		SOCKS5Addr:       defaultSOCKS5Addr,
+		CacheTTL:         defaultCacheTTL,
+		DNSTimeout:       defaultDNSTimeout,
+		TLSTimeout:       defaultTLSTimeout,
+		MaxParallelTests: defaultMaxParallel,
+		AnswerTTL:        defaultAnswerTTL,
+		ShutdownTimeout:  defaultShutdownTime,
 	}
 
 	f, err := os.Open(path)
@@ -130,7 +161,8 @@ func loadConfig(path string) (Config, error) {
 					cfg.AdguardDNS = value
 				}
 			case "cache":
-				if key == "ttl" {
+				switch key {
+				case "ttl":
 					d, err := time.ParseDuration(value)
 					if err != nil || d <= 0 {
 						return cfg, fmt.Errorf("%s:%d: invalid cache ttl %q", path, lineNo, value)
@@ -138,8 +170,39 @@ func loadConfig(path string) (Config, error) {
 					cfg.CacheTTL = d
 				}
 			case "server":
-				if key == "address" {
+				switch key {
+				case "address":
 					cfg.ListenAddr = value
+				case "dns_timeout":
+					d, err := time.ParseDuration(value)
+					if err != nil || d <= 0 {
+						return cfg, fmt.Errorf("%s:%d: invalid dns timeout %q", path, lineNo, value)
+					}
+					cfg.DNSTimeout = d
+				case "tls_timeout":
+					d, err := time.ParseDuration(value)
+					if err != nil || d <= 0 {
+						return cfg, fmt.Errorf("%s:%d: invalid tls timeout %q", path, lineNo, value)
+					}
+					cfg.TLSTimeout = d
+				case "parallel_tests", "max_parallel_tests":
+					v, err := strconv.Atoi(value)
+					if err != nil || v <= 0 {
+						return cfg, fmt.Errorf("%s:%d: invalid parallel_tests %q", path, lineNo, value)
+					}
+					cfg.MaxParallelTests = v
+				case "answer_ttl":
+					v, err := strconv.ParseUint(value, 10, 32)
+					if err != nil || v <= 0 {
+						return cfg, fmt.Errorf("%s:%d: invalid answer_ttl %q", path, lineNo, value)
+					}
+					cfg.AnswerTTL = uint32(v)
+				case "shutdown_timeout":
+					d, err := time.ParseDuration(value)
+					if err != nil || d <= 0 {
+						return cfg, fmt.Errorf("%s:%d: invalid shutdown timeout %q", path, lineNo, value)
+					}
+					cfg.ShutdownTimeout = d
 				}
 			}
 		default:

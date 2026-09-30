@@ -32,12 +32,19 @@ address=127.0.0.1:1080
 [cache]
 ttl=24h
 
-[server]
-address=127.0.0.1:5354
-
 [adguard]
 address=127.0.0.1:53053
+
+[server]
+address=127.0.0.1:5354
+dns_timeout=3s
+tls_timeout=3s
+parallel_tests=16
+answer_ttl=300
+shutdown_timeout=5s
 ```
+
+The config file also accepts multiple entries under `[direct_dns]` and `[proxy_dns]`. Durations use Go duration syntax (for example, `3s` or `24h`); `answer_ttl` is in seconds. All values above have defaults, but can be changed in the config file.
 
 ## Run
 

@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/miekg/dns"
 )
@@ -34,7 +33,11 @@ func main() {
 	logger.Printf("proxy DNS resolvers: %d", len(cfg.ProxyDNS))
 	logger.Printf("SOCKS5 proxy: %s", cfg.SOCKS5Addr)
 	logger.Printf("cache TTL: %s", cfg.CacheTTL)
-	logger.Printf("parallel TLS tests: %d", maxParallelTests)
+	logger.Printf("DNS timeout: %s", cfg.DNSTimeout)
+	logger.Printf("TLS timeout: %s", cfg.TLSTimeout)
+	logger.Printf("parallel TLS tests: %d", cfg.MaxParallelTests)
+	logger.Printf("answer TTL: %d", cfg.AnswerTTL)
+	logger.Printf("shutdown timeout: %s", cfg.ShutdownTimeout)
 
 	handler := dns.HandlerFunc(handleDNS)
 	udpServer := &dns.Server{Addr: cfg.ListenAddr, Net: "udp", Handler: handler}
@@ -60,7 +63,7 @@ func main() {
 	<-ctx.Done()
 	logger.Printf("shutdown signal received, stopping DNS servers")
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer shutdownCancel()
 	_ = shutdownCtx
 

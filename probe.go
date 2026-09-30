@@ -4,15 +4,15 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
-	"time"
-)
-
-const (
-	tlsTimeout = 3 * time.Second
 )
 
 func testIP(parent context.Context, domain string, ip string) bool {
-	ctx, cancel := context.WithTimeout(parent, tlsTimeout)
+	timeout := currentConfig.TLSTimeout
+	if timeout <= 0 {
+		timeout = defaultTLSTimeout
+	}
+
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	dialer := &tls.Dialer{
@@ -36,7 +36,12 @@ func testIP(parent context.Context, domain string, ip string) bool {
 func testCachedIP(domain string, ip string) bool {
 	logger.Printf("%s: validating cached IP %s", domain, ip)
 
-	ctx, cancel := context.WithTimeout(context.Background(), tlsTimeout)
+	timeout := currentConfig.TLSTimeout
+	if timeout <= 0 {
+		timeout = defaultTLSTimeout
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	return testIP(ctx, domain, ip)

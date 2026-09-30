@@ -111,7 +111,7 @@ func resolveAndSelect(domain string, cfg Config) (string, bool) {
 	}
 
 	if len(cfg.ProxyDNS) > 0 {
-		if strings.TrimSpace(cfg.SOCKS5Addr) == "" {
+		if strings.TrimSpace(cfg.DNSSOCKS5Addr) == "" {
 			logger.Printf("%s: proxy DNS configured but SOCKS5 address is empty", domain)
 		} else if ip, ok := resolvePhase(domain, cfg.ProxyDNS, true, cfg); ok {
 			return ip, true
@@ -144,7 +144,7 @@ func resolvePhase(domain string, servers []string, throughSOCKS bool, cfg Config
 			var ips []string
 			if strings.HasPrefix(strings.ToLower(server), "https://") || strings.HasPrefix(strings.ToLower(server), "http://") {
 				if throughSOCKS {
-					ips = queryDoHSOCKS5(ctx, domain, server, cfg.SOCKS5Addr)
+					ips = queryDoHSOCKS5(ctx, domain, server, cfg.DNSSOCKS5Addr)
 				} else {
 					logger.Printf("%s: ignoring DoH resolver in direct DNS section: %s", domain, server)
 				}
@@ -153,7 +153,7 @@ func resolvePhase(domain string, servers []string, throughSOCKS bool, cfg Config
 					server = net.JoinHostPort(server, "53")
 				}
 				if throughSOCKS {
-					ips = queryDNSSOCKS5(ctx, domain, cfg.SOCKS5Addr, server)
+					ips = queryDNSSOCKS5(ctx, domain, cfg.DNSSOCKS5Addr, server)
 				} else {
 					ips = queryDNS(ctx, domain, server)
 				}

@@ -14,30 +14,34 @@ const (
 	defaultConfigPath  = "/etc/ipscoutdns.conf"
 	priorityConfigPath = "ipscoutdns.conf"
 
-	defaultListenAddr   = "127.0.0.1:5354"
-	defaultFallbackDNS  = "127.0.0.1:53053"
-	defaultSOCKS5Addr   = "127.0.0.1:1080"
-	defaultCacheTTL     = 24 * time.Hour
-	defaultDNSTimeout   = 3 * time.Second
-	defaultTLSTimeout   = 3 * time.Second
-	defaultTLSPort      = 443
-	defaultTLSRoute     = "direct"
-	defaultMaxParallel  = 16
-	defaultAnswerTTL    = uint32(300)
-	defaultShutdownTime = 5 * time.Second
+	defaultListenAddr    = "127.0.0.1:5354"
+	defaultFallbackDNS   = "127.0.0.1:53053"
+	defaultSOCKS5Addr    = "127.0.0.1:1080"
+	defaultTLSSOCKS5Addr = "127.0.0.1:1080"
+	defaultCacheTTL      = 24 * time.Hour
+	defaultDNSTimeout    = 3 * time.Second
+	defaultTLSTimeout    = 3 * time.Second
+	defaultTLSPort       = 443
+	defaultTLSRoute      = "direct"
+	defaultMaxParallel   = 16
+	defaultAnswerTTL     = uint32(300)
+	defaultShutdownTime  = 5 * time.Second
 )
 
 type Config struct {
-	DirectDNS        []string
-	ProxyDNS         []string
-	ListenAddr       string
-	FallbackDNS      string
-	SOCKS5Addr       string
-	CacheTTL         time.Duration
-	DNSTimeout       time.Duration
-	TLSTimeout       time.Duration
-	TLSPort          int
-	TLSRoute         string
+	DirectDNS            []string
+	ProxyDNS             []string
+	ListenAddr           string
+	FallbackDNS          string
+	SOCKS5Addr           string // legacy alias for DNSSOCKS5Addr
+	DNSSOCKS5Addr        string // SOCKS5 proxy used for DNS resolvers
+	TLSSOCKS5Addr        string // SOCKS5 proxy used for TLS reachability checks
+	TLSProxyPort         int
+	CacheTTL             time.Duration
+	DNSTimeout           time.Duration
+	TLSTimeout           time.Duration
+	TLSPort              int
+	TLSRoute             string
 	MaxParallelTests     int
 	AnswerTTL            uint32
 	ShutdownTimeout      time.Duration
@@ -62,9 +66,14 @@ func (c Config) validate() error {
 	if _, _, err := net.SplitHostPort(c.FallbackDNS); err != nil {
 		return fmt.Errorf("fallback.address must be host:port: %w", err)
 	}
-	if strings.TrimSpace(c.SOCKS5Addr) != "" {
-		if _, _, err := net.SplitHostPort(c.SOCKS5Addr); err != nil {
+	if strings.TrimSpace(c.DNSSOCKS5Addr) != "" {
+		if _, _, err := net.SplitHostPort(c.DNSSOCKS5Addr); err != nil {
 			return fmt.Errorf("socks5 address must be host:port: %w", err)
+		}
+	}
+	if strings.TrimSpace(c.TLSSOCKS5Addr) != "" {
+		if _, _, err := net.SplitHostPort(c.TLSSOCKS5Addr); err != nil {
+			return fmt.Errorf("tls socks5 address must be host:port: %w", err)
 		}
 	}
 	if c.CacheTTL <= 0 {
@@ -82,8 +91,8 @@ func (c Config) validate() error {
 	if c.TLSRoute != "direct" && c.TLSRoute != "proxy" {
 		return fmt.Errorf("server.tls_route must be either direct or proxy")
 	}
-	if c.TLSRoute == "proxy" && strings.TrimSpace(c.SOCKS5Addr) == "" {
-		return fmt.Errorf("server.tls_route is proxy but socks5 address is empty")
+	if c.TLSRoute == "proxy" && strings.TrimSpace(c.TLSSOCKS5Addr) == "" {
+		return fmt.Errorf("server.tls_route is proxy but tls socks5 address is empty")
 	}
 	if c.MaxParallelTests <= 0 {
 		return fmt.Errorf("server.parallel_tests must be greater than zero")
@@ -128,6 +137,8 @@ func loadConfig(path string) (Config, error) {
 		ListenAddr:       defaultListenAddr,
 		FallbackDNS:      defaultFallbackDNS,
 		SOCKS5Addr:       defaultSOCKS5Addr,
+		DNSSOCKS5Addr:    defaultSOCKS5Addr,
+		TLSSOCKS5Addr:    defaultTLSSOCKS5Addr,
 		CacheTTL:         defaultCacheTTL,
 		DNSTimeout:       defaultDNSTimeout,
 		TLSTimeout:       defaultTLSTimeout,
@@ -143,6 +154,14 @@ func loadConfig(path string) (Config, error) {
 		return cfg, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
+
+	var (
+		rawDNSProxyAddr string
+		rawDNSProxyPort string
+		rawTLSProxyAddr string
+		rawTLSProxyPort string
+		rawSOCKS5Addr   string
+	)
 
 	section := ""
 	scanner := bufio.NewScanner(f)
@@ -163,7 +182,7 @@ func loadConfig(path string) (Config, error) {
 			cfg.DirectDNS = append(cfg.DirectDNS, line)
 		case "proxy_dns":
 			cfg.ProxyDNS = append(cfg.ProxyDNS, line)
-		case "socks5", "fallback", "cache", "server":
+		case "socks5", "dns_proxy", "dns_socks5", "tls_proxy", "tls_socks5", "fallback", "cache", "server":
 			key, value, ok := strings.Cut(line, "=")
 			if !ok {
 				return cfg, fmt.Errorf("%s:%d: expected key=value", path, lineNo)
@@ -171,8 +190,53 @@ func loadConfig(path string) (Config, error) {
 			key, value = strings.ToLower(strings.TrimSpace(key)), strings.TrimSpace(value)
 			switch section {
 			case "socks5":
-				if key == "address" {
-					cfg.SOCKS5Addr = value
+				switch key {
+				case "address":
+					rawSOCKS5Addr = value
+				case "port":
+					v, err := strconv.Atoi(value)
+					if err != nil || v <= 0 || v > 65535 {
+						return cfg, fmt.Errorf("%s:%d: invalid socks5 port %q", path, lineNo, value)
+					}
+					rawDNSProxyPort = value
+				case "dns_address", "dns_proxy":
+					rawDNSProxyAddr = value
+				case "dns_port", "dns_proxy_port":
+					v, err := strconv.Atoi(value)
+					if err != nil || v <= 0 || v > 65535 {
+						return cfg, fmt.Errorf("%s:%d: invalid dns proxy port %q", path, lineNo, value)
+					}
+					rawDNSProxyPort = value
+				case "tls_address", "tls_proxy":
+					rawTLSProxyAddr = value
+				case "tls_port", "tls_proxy_port":
+					v, err := strconv.Atoi(value)
+					if err != nil || v <= 0 || v > 65535 {
+						return cfg, fmt.Errorf("%s:%d: invalid tls proxy port %q", path, lineNo, value)
+					}
+					rawTLSProxyPort = value
+				}
+			case "dns_proxy", "dns_socks5":
+				switch key {
+				case "address":
+					rawDNSProxyAddr = value
+				case "port":
+					v, err := strconv.Atoi(value)
+					if err != nil || v <= 0 || v > 65535 {
+						return cfg, fmt.Errorf("%s:%d: invalid dns proxy port %q", path, lineNo, value)
+					}
+					rawDNSProxyPort = value
+				}
+			case "tls_proxy", "tls_socks5":
+				switch key {
+				case "address":
+					rawTLSProxyAddr = value
+				case "port":
+					v, err := strconv.Atoi(value)
+					if err != nil || v <= 0 || v > 65535 {
+						return cfg, fmt.Errorf("%s:%d: invalid tls proxy port %q", path, lineNo, value)
+					}
+					rawTLSProxyPort = value
 				}
 			case "fallback":
 				if key == "address" {
@@ -214,6 +278,22 @@ func loadConfig(path string) (Config, error) {
 						return cfg, fmt.Errorf("%s:%d: invalid tls route %q", path, lineNo, value)
 					}
 					cfg.TLSRoute = value
+				case "tls_proxy_port":
+					v, err := strconv.Atoi(value)
+					if err != nil || v <= 0 || v > 65535 {
+						return cfg, fmt.Errorf("%s:%d: invalid tls proxy port %q", path, lineNo, value)
+					}
+					rawTLSProxyPort = value
+				case "tls_proxy", "tls_proxy_address":
+					rawTLSProxyAddr = value
+				case "dns_proxy_port":
+					v, err := strconv.Atoi(value)
+					if err != nil || v <= 0 || v > 65535 {
+						return cfg, fmt.Errorf("%s:%d: invalid dns proxy port %q", path, lineNo, value)
+					}
+					rawDNSProxyPort = value
+				case "dns_proxy", "dns_proxy_address":
+					rawDNSProxyAddr = value
 				case "parallel_tests", "max_parallel_tests":
 					v, err := strconv.Atoi(value)
 					if err != nil || v <= 0 {
@@ -239,8 +319,6 @@ func loadConfig(path string) (Config, error) {
 				case "domains_file":
 					cfg.DomainsFile = value
 				}
-
-
 			}
 		default:
 			return cfg, fmt.Errorf("%s:%d: setting outside a known section", path, lineNo)
@@ -248,6 +326,69 @@ func loadConfig(path string) (Config, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return cfg, err
+	}
+
+	// If a proxy address was given as just a port (e.g. "1081" or ":1081"), treat it as port
+	if p, err := strconv.Atoi(strings.TrimPrefix(rawDNSProxyAddr, ":")); err == nil && p > 0 && p <= 65535 {
+		if rawDNSProxyPort == "" {
+			rawDNSProxyPort = strconv.Itoa(p)
+		}
+		rawDNSProxyAddr = ""
+	}
+	if p, err := strconv.Atoi(strings.TrimPrefix(rawTLSProxyAddr, ":")); err == nil && p > 0 && p <= 65535 {
+		if rawTLSProxyPort == "" {
+			rawTLSProxyPort = strconv.Itoa(p)
+		}
+		rawTLSProxyAddr = ""
+	}
+
+	// Resolve DNS SOCKS5 address
+	dnsBase := defaultSOCKS5Addr
+	if rawDNSProxyAddr != "" {
+		dnsBase = rawDNSProxyAddr
+	} else if rawSOCKS5Addr != "" {
+		dnsBase = rawSOCKS5Addr
+	}
+
+	if rawDNSProxyPort != "" {
+		host, _, err := net.SplitHostPort(dnsBase)
+		if err != nil || host == "" {
+			host = dnsBase
+		}
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		cfg.DNSSOCKS5Addr = net.JoinHostPort(host, rawDNSProxyPort)
+	} else {
+		cfg.DNSSOCKS5Addr = dnsBase
+	}
+	cfg.SOCKS5Addr = cfg.DNSSOCKS5Addr
+
+	// Resolve TLS SOCKS5 address
+	tlsBase := ""
+	if rawTLSProxyAddr != "" {
+		tlsBase = rawTLSProxyAddr
+	} else {
+		tlsBase = cfg.DNSSOCKS5Addr
+	}
+
+	if rawTLSProxyPort != "" {
+		host, _, err := net.SplitHostPort(tlsBase)
+		if err != nil || host == "" {
+			host = tlsBase
+		}
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		cfg.TLSSOCKS5Addr = net.JoinHostPort(host, rawTLSProxyPort)
+	} else {
+		cfg.TLSSOCKS5Addr = tlsBase
+	}
+
+	if _, p, err := net.SplitHostPort(cfg.TLSSOCKS5Addr); err == nil {
+		if portNum, err := strconv.Atoi(p); err == nil {
+			cfg.TLSProxyPort = portNum
+		}
 	}
 
 	cfg.DirectDNS = cleanList(cfg.DirectDNS)

@@ -33,7 +33,7 @@ func testIP(parent context.Context, domain string, ip string) bool {
 	targetAddr := net.JoinHostPort(ip, port)
 
 	if currentConfig.TLSRoute == "proxy" {
-		conn, err = dialSOCKS5(ctx, currentConfig.SOCKS5Addr, targetAddr)
+		conn, err = dialSOCKS5(ctx, currentConfig.TLSSOCKS5Addr, targetAddr)
 		if err == nil {
 			tlsConn := tls.Client(conn, tlsConfig)
 			err = tlsConn.HandshakeContext(ctx)

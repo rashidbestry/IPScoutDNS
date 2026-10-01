@@ -62,15 +62,16 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	ip, ok := resolveAndSelect(domain, currentConfig)
+	ip, ok, cacheHit := resolveAndSelectStatus(domain, currentConfig)
 	f.ip = ip
 	f.ok = ok
 	close(f.done)
 	removeFlight(domain, f)
 
 	if ok {
-		updateCache(domain, ip)
-		logger.Printf("%s: WORKING IP = %s", domain, ip)
+		if !cacheHit {
+			logger.Printf("%s: WORKING IP = %s", domain, ip)
+		}
 		replyIP(w, req, ip)
 		return
 	}
@@ -82,6 +83,10 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 
 func resolveAndSelect(domain string, cfg Config) (string, bool) {
 	return resolveAndSelectWith(domain, cfg, queryResolver, testTLS, pingIPFn)
+}
+
+func resolveAndSelectStatus(domain string, cfg Config) (string, bool, bool) {
+	return resolveAndSelectWithStatus(domain, cfg, queryResolver, testTLS, pingIPFn)
 }
 
 type resolverQueryFunc func(context.Context, string, string, bool, Config) []string
@@ -106,30 +111,27 @@ func normalizeIPv4Candidate(value string) (string, bool) {
 }
 
 func resolveAndSelectWith(domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, pingCheck icmpProbeFunc) (string, bool) {
-	ips := collectResolverIPs(domain, cfg, query)
+	ip, ok, _ := resolveAndSelectWithStatus(domain, cfg, query, tlsCheck, pingCheck)
+	return ip, ok
+}
+
+func resolveAndSelectWithStatus(domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, pingCheck icmpProbeFunc) (string, bool, bool) {
 	if cfg.CacheTTL > 0 {
 		if entry, ok := getCache(domain); ok {
 			if time.Since(entry.Checked) < cfg.CacheTTL {
 				if cachedIP, valid := normalizeIPv4Candidate(entry.IP); valid {
-					found := false
-					for _, ip := range ips {
-						if ip == cachedIP {
-							found = true
-							break
-						}
-					}
-					if !found {
-						ips = append(ips, cachedIP)
-					}
+					logger.Printf("%s: CACHE HIT = %s", domain, cachedIP)
+					return cachedIP, true, true
 				}
-			} else {
-				deleteCache(domain)
 			}
+			deleteCache(domain)
 		}
 	}
+
+	ips := collectResolverIPs(domain, cfg, query)
 	if len(ips) == 0 {
 		logger.Printf("%s: no resolver returned IPv4 addresses", domain)
-		return "", false
+		return "", false, false
 	}
 	logger.Printf("%s: collected %d unique IPv4 candidates", domain, len(ips))
 
@@ -172,8 +174,10 @@ func resolveAndSelectWith(domain string, cfg Config, query resolverQueryFunc, tl
 	}
 	if selectedIP == "" {
 		deleteCache(domain)
+	} else {
+		updateCache(domain, selectedIP)
 	}
-	return selectedIP, selectedIP != ""
+	return selectedIP, selectedIP != "", false
 }
 
 func collectResolverIPs(domain string, cfg Config, query resolverQueryFunc) []string {

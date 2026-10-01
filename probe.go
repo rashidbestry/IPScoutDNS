@@ -7,23 +7,17 @@ import (
 	"strconv"
 )
 
-func testTCP(parent context.Context, domain string, ip string, cfg Config) bool {
-	ctx, cancel := reachabilityContext(parent, cfg)
-	defer cancel()
-	conn, err := dialReachability(ctx, domain, ip, cfg)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
+type tlsProbeResult struct {
+	tcpReachable bool
+	tlsReady     bool
 }
 
-func testTLS(parent context.Context, domain string, ip string, cfg Config) bool {
+func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsProbeResult {
 	ctx, cancel := reachabilityContext(parent, cfg)
 	defer cancel()
 	conn, err := dialReachability(ctx, domain, ip, cfg)
 	if err != nil {
-		return false
+		return tlsProbeResult{}
 	}
 	defer conn.Close()
 
@@ -32,7 +26,10 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) bool 
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: true,
 	})
-	return tlsConn.HandshakeContext(ctx) == nil
+	return tlsProbeResult{
+		tcpReachable: true,
+		tlsReady:     tlsConn.HandshakeContext(ctx) == nil,
+	}
 }
 
 func reachabilityContext(parent context.Context, cfg Config) (context.Context, context.CancelFunc) {

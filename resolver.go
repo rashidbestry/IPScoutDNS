@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -36,15 +37,13 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 
 	q := req.Question[0]
 	domain := strings.TrimSuffix(strings.ToLower(q.Name), ".")
-	qtype := dns.TypeToString[q.Qtype]
-
-	logger.Printf("request: %s [%s] from %s", domain, qtype, w.RemoteAddr())
 
 	if q.Qtype != dns.TypeA {
-		logger.Printf("%s: not an A record query (%s), forwarding to fallback", domain, qtype)
 		forwardDNS(w, req, currentConfig.FallbackDNS)
 		return
 	}
+
+	logger.Printf("request: %s [A] from %s", domain, w.RemoteAddr())
 
 	if !isDomainAllowed(domain) {
 		logger.Printf("%s: domain not in allowed list, forwarding to fallback", domain)
@@ -82,11 +81,11 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 }
 
 func resolveAndSelect(domain string, cfg Config) (string, bool) {
-	return resolveAndSelectWith(domain, cfg, queryResolver, testTCP, testTLS, pingIPFn)
+	return resolveAndSelectWith(domain, cfg, queryResolver, testTLS, pingIPFn)
 }
 
 type resolverQueryFunc func(context.Context, string, string, bool, Config) []string
-type ipProbeFunc func(context.Context, string, string, Config) bool
+type tlsProbeFunc func(context.Context, string, string, Config) tlsProbeResult
 type icmpProbeFunc func(string) bool
 
 type resolverTarget struct {
@@ -94,13 +93,24 @@ type resolverTarget struct {
 	throughSOCKS bool
 }
 
-func resolveAndSelectWith(domain string, cfg Config, query resolverQueryFunc, tcpCheck ipProbeFunc, tlsCheck ipProbeFunc, pingCheck icmpProbeFunc) (string, bool) {
+func normalizeIPv4Candidate(value string) (string, bool) {
+	parsed := net.ParseIP(strings.TrimSpace(value))
+	if parsed == nil {
+		return "", false
+	}
+	ipv4 := parsed.To4()
+	if ipv4 == nil || !ipv4.IsGlobalUnicast() {
+		return "", false
+	}
+	return ipv4.String(), true
+}
+
+func resolveAndSelectWith(domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, pingCheck icmpProbeFunc) (string, bool) {
 	ips := collectResolverIPs(domain, cfg, query)
 	if cfg.CacheTTL > 0 {
 		if entry, ok := getCache(domain); ok {
 			if time.Since(entry.Checked) < cfg.CacheTTL {
-				if parsed := net.ParseIP(entry.IP); parsed != nil && parsed.To4() != nil {
-					cachedIP := parsed.To4().String()
+				if cachedIP, valid := normalizeIPv4Candidate(entry.IP); valid {
 					found := false
 					for _, ip := range ips {
 						if ip == cachedIP {
@@ -124,15 +134,15 @@ func resolveAndSelectWith(domain string, cfg Config, query resolverQueryFunc, tc
 	logger.Printf("%s: collected %d unique IPv4 candidates", domain, len(ips))
 
 	ctx := context.Background()
-	tcpResults := runIPChecks(ctx, ips, cfg.MaxParallelTests, func(ip string) bool {
-		logger.Printf("%s: TCP testing %s", domain, ip)
-		return tcpCheck(ctx, domain, ip, cfg)
+	tlsResults := runIPChecks(ctx, ips, cfg.MaxParallelTests, func(ip string) tlsProbeResult {
+		logger.Printf("%s: TLS testing %s", domain, ip)
+		return tlsCheck(ctx, domain, ip, cfg)
 	})
 
-	var tcpReachable, tcpFailed []string
+	var tcpFailed []string
 	for _, ip := range ips {
-		if tcpResults[ip] {
-			tcpReachable = append(tcpReachable, ip)
+		result := tlsResults[ip]
+		if result.tcpReachable {
 			recordReachableIP(ip)
 		} else {
 			tcpFailed = append(tcpFailed, ip)
@@ -151,13 +161,9 @@ func resolveAndSelectWith(domain string, cfg Config, query resolverQueryFunc, tc
 		}
 	}
 
-	tlsResults := runIPChecks(ctx, tcpReachable, cfg.MaxParallelTests, func(ip string) bool {
-		logger.Printf("%s: TLS testing %s", domain, ip)
-		return tlsCheck(ctx, domain, ip, cfg)
-	})
 	selectedIP := ""
-	for _, ip := range tcpReachable {
-		if tlsResults[ip] {
+	for _, ip := range ips {
+		if tlsResults[ip].tlsReady {
 			recordReachableHost(domain, ip)
 			if selectedIP == "" {
 				selectedIP = ip
@@ -214,11 +220,10 @@ func collectResolverIPs(domain string, cfg Config, query resolverQueryFunc) []st
 	var ips []string
 	for range targets {
 		for _, value := range <-results {
-			parsed := net.ParseIP(strings.TrimSpace(value))
-			if parsed == nil || parsed.To4() == nil {
+			ip, valid := normalizeIPv4Candidate(value)
+			if !valid {
 				continue
 			}
-			ip := parsed.To4().String()
 			if seen[ip] {
 				continue
 			}
@@ -250,8 +255,8 @@ func queryResolver(ctx context.Context, domain string, server string, throughSOC
 	return queryDNS(ctx, domain, server, cfg)
 }
 
-func runIPChecks(ctx context.Context, ips []string, parallel int, check func(string) bool) map[string]bool {
-	results := make(map[string]bool, len(ips))
+func runIPChecks[T any](ctx context.Context, ips []string, parallel int, check func(string) T) map[string]T {
+	results := make(map[string]T, len(ips))
 	if len(ips) == 0 {
 		return results
 	}
@@ -262,8 +267,8 @@ func runIPChecks(ctx context.Context, ips []string, parallel int, check func(str
 		parallel = len(ips)
 	}
 	type result struct {
-		ip string
-		ok bool
+		ip    string
+		value T
 	}
 	jobs := make(chan string)
 	completed := make(chan result, len(ips))
@@ -273,7 +278,7 @@ func runIPChecks(ctx context.Context, ips []string, parallel int, check func(str
 		go func() {
 			defer workers.Done()
 			for ip := range jobs {
-				completed <- result{ip: ip, ok: check(ip)}
+				completed <- result{ip: ip, value: check(ip)}
 			}
 		}()
 	}
@@ -286,7 +291,7 @@ func runIPChecks(ctx context.Context, ips []string, parallel int, check func(str
 		close(completed)
 	}()
 	for result := range completed {
-		results[result.ip] = result.ok
+		results[result.ip] = result.value
 	}
 	return results
 }
@@ -466,6 +471,33 @@ func replyIP(w dns.ResponseWriter, req *dns.Msg, ip string) {
 	}
 }
 
+const forwardFailureLogInterval = 30 * time.Second
+
+var (
+	forwardFailureLogMu sync.Mutex
+	forwardFailureLogs  = make(map[string]time.Time)
+)
+
+func logForwardFailure(server string, err error) {
+	var networkErr net.Error
+	if !errors.As(err, &networkErr) || !networkErr.Timeout() {
+		logger.Printf("forward DNS to %s failed: %v", server, err)
+		return
+	}
+
+	now := time.Now()
+	forwardFailureLogMu.Lock()
+	lastLogged := forwardFailureLogs[server]
+	if !lastLogged.IsZero() && now.Sub(lastLogged) < forwardFailureLogInterval {
+		forwardFailureLogMu.Unlock()
+		return
+	}
+	forwardFailureLogs[server] = now
+	forwardFailureLogMu.Unlock()
+
+	logger.Printf("forward DNS to %s failed: %v", server, err)
+}
+
 func forwardDNS(w dns.ResponseWriter, req *dns.Msg, server string) {
 	timeout := currentConfig.DNSTimeout
 	if timeout <= 0 {
@@ -483,7 +515,7 @@ func forwardDNS(w dns.ResponseWriter, req *dns.Msg, server string) {
 	}
 	resp, _, err := client.ExchangeContext(ctx, req, server)
 	if err != nil {
-		logger.Printf("forward DNS to %s failed: %v", server, err)
+		logForwardFailure(server, err)
 		dns.HandleFailed(w, req)
 		return
 	}

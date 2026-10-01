@@ -45,6 +45,7 @@ type Config struct {
 	TLSPort                int
 	TLSRoute               string
 	MaxParallelTests       int
+	LogsEnabled            bool
 	AnswerTTL              uint32
 	ShutdownTimeout        time.Duration
 	ReachableHostsFile     string
@@ -162,6 +163,7 @@ func loadConfig(path string) (Config, error) {
 		TLSPort:          defaultTLSPort,
 		TLSRoute:         defaultTLSRoute,
 		MaxParallelTests: defaultMaxParallel,
+		LogsEnabled:      true,
 		AnswerTTL:        defaultAnswerTTL,
 		ShutdownTimeout:  defaultShutdownTime,
 	}
@@ -276,6 +278,12 @@ func loadConfig(path string) (Config, error) {
 				}
 			case "server":
 				switch key {
+				case "logs_enabled":
+					enabled, err := strconv.ParseBool(value)
+					if err != nil {
+						return cfg, fmt.Errorf("%s:%d: invalid logs_enabled value %q", path, lineNo, value)
+					}
+					cfg.LogsEnabled = enabled
 				case "dns_interface":
 					cfg.DNSInterface = value
 				case "tls_interface":

@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -61,6 +62,9 @@ func main() {
 	}
 
 	currentConfig = cfg
+	if !cfg.LogsEnabled {
+		logger.SetOutput(io.Discard)
+	}
 	if cfg.DomainsFile != "" {
 		if err := loadDomainsFile(cfg.DomainsFile); err != nil {
 			logger.Fatalf("failed to load domains file: %v", err)

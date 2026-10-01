@@ -35,7 +35,9 @@ type Config struct {
 	FallbackDNS            string
 	SOCKS5Addr             string // legacy alias for DNSSOCKS5Addr
 	DNSSOCKS5Addr          string // SOCKS5 proxy used for DNS resolvers
+	DNSInterface           string // local interface name or source IP for direct DNS
 	TLSSOCKS5Addr          string // SOCKS5 proxy used for reachability checks
+	TLSInterface           string // local interface name or source IP for reachability checks
 	TLSProxyPort           int
 	CacheTTL               time.Duration
 	DNSTimeout             time.Duration
@@ -48,7 +50,6 @@ type Config struct {
 	ReachableHostsFile     string
 	ReachableDomainsFile   string
 	ReachableIPsFile       string
-	UnreachableHostsFile   string
 	UnreachableDomainsFile string
 	UnreachableIPsFile     string
 	DomainsFile            string
@@ -80,6 +81,12 @@ func (c Config) validate() error {
 			return fmt.Errorf("tls socks5 address must be host:port: %w", err)
 		}
 	}
+	if err := validateInterfaceSelector(c.DNSInterface); err != nil {
+		return fmt.Errorf("server.dns_interface: %w", err)
+	}
+	if err := validateInterfaceSelector(c.TLSInterface); err != nil {
+		return fmt.Errorf("server.tls_interface: %w", err)
+	}
 	if c.CacheTTL <= 0 {
 		return fmt.Errorf("cache.ttl must be greater than zero")
 	}
@@ -92,11 +99,17 @@ func (c Config) validate() error {
 	if c.TLSPort <= 0 || c.TLSPort > 65535 {
 		return fmt.Errorf("server.tls_port must be a valid port number")
 	}
-	if c.TLSRoute != "direct" && c.TLSRoute != "proxy" {
-		return fmt.Errorf("server.tls_route must be either direct or proxy")
+	if c.TLSRoute != "direct" && c.TLSRoute != "proxy" && c.TLSRoute != "interface" {
+		return fmt.Errorf("server.tls_route must be direct, proxy, or interface")
 	}
 	if c.TLSRoute == "proxy" && strings.TrimSpace(c.TLSSOCKS5Addr) == "" {
 		return fmt.Errorf("server.tls_route is proxy but tls socks5 address is empty")
+	}
+	if c.TLSRoute == "interface" && strings.TrimSpace(c.TLSInterface) == "" {
+		return fmt.Errorf("server.tls_route is interface but tls_interface is empty")
+	}
+	if c.TLSRoute != "interface" && strings.TrimSpace(c.TLSInterface) != "" {
+		return fmt.Errorf("server.tls_interface requires tls_route=interface")
 	}
 	if c.MaxParallelTests <= 0 {
 		return fmt.Errorf("server.parallel_tests must be greater than zero")
@@ -263,6 +276,10 @@ func loadConfig(path string) (Config, error) {
 				}
 			case "server":
 				switch key {
+				case "dns_interface":
+					cfg.DNSInterface = value
+				case "tls_interface":
+					cfg.TLSInterface = value
 				case "ttl":
 					d, err := time.ParseDuration(value)
 					if err != nil || d <= 0 {
@@ -290,7 +307,7 @@ func loadConfig(path string) (Config, error) {
 					}
 					cfg.TLSPort = v
 				case "tls_route":
-					if value != "direct" && value != "proxy" {
+					if value != "direct" && value != "proxy" && value != "interface" {
 						return cfg, fmt.Errorf("%s:%d: invalid tls route %q", path, lineNo, value)
 					}
 					cfg.TLSRoute = value
@@ -334,8 +351,6 @@ func loadConfig(path string) (Config, error) {
 					cfg.ReachableDomainsFile = value
 				case "reachable_ips_file", "reachable_ips":
 					cfg.ReachableIPsFile = value
-				case "unreachable_hosts":
-					cfg.UnreachableHostsFile = value
 				case "unreachable_domains_file", "unreachable_domains":
 					cfg.UnreachableDomainsFile = value
 				case "unreachable_ips_file", "unreachable_ips":

@@ -74,11 +74,15 @@ func main() {
 	logger.Printf("direct DNS resolvers: %d", len(cfg.DirectDNS))
 	logger.Printf("proxy DNS resolvers: %d", len(cfg.ProxyDNS))
 	logger.Printf("DNS SOCKS5 proxy: %s", cfg.DNSSOCKS5Addr)
+	logger.Printf("DNS interface: %s", configuredOrDefault(cfg.DNSInterface))
 	logger.Printf("cache TTL: %s", cfg.CacheTTL)
 	logger.Printf("DNS timeout: %s", cfg.DNSTimeout)
 	logger.Printf("TLS timeout: %s", cfg.TLSTimeout)
 	logger.Printf("TLS port: %d", cfg.TLSPort)
 	logger.Printf("TLS route: %s", cfg.TLSRoute)
+	if cfg.TLSRoute == "interface" {
+		logger.Printf("TLS interface: %s", cfg.TLSInterface)
+	}
 	logger.Printf("TLS SOCKS5 proxy: %s", cfg.TLSSOCKS5Addr)
 	logger.Printf("parallel TLS tests: %d", cfg.MaxParallelTests)
 	logger.Printf("answer TTL: %d", cfg.AnswerTTL)
@@ -120,4 +124,11 @@ func main() {
 	}
 
 	logger.Printf("IPScoutDNS stopped cleanly")
+}
+
+func configuredOrDefault(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "system default"
+	}
+	return value
 }

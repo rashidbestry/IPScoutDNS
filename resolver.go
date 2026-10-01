@@ -52,28 +52,6 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	if entry, ok := getCache(domain); ok {
-		age := time.Since(entry.Checked)
-		if age < currentConfig.CacheTTL {
-			logger.Printf("%s: CACHE HIT %s (age %s)", domain, entry.IP, age.Round(time.Second))
-			replyIP(w, req, entry.IP)
-			return
-		}
-
-		logger.Printf("%s: cached IP expired: %s", domain, entry.IP)
-		if testCachedIP(domain, entry.IP) {
-			logger.Printf("%s: cached IP still reachable: %s", domain, entry.IP)
-			recordReachableHost(domain, entry.IP)
-			updateCache(domain, entry.IP)
-			replyIP(w, req, entry.IP)
-			return
-		}
-
-		logger.Printf("%s: cached IP FAILED: %s", domain, entry.IP)
-		recordUnreachableHost(context.Background(), domain, entry.IP)
-		deleteCache(domain)
-	}
-
 	f, leader := getFlight(domain)
 	if !leader {
 		<-f.done
@@ -104,164 +82,230 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 }
 
 func resolveAndSelect(domain string, cfg Config) (string, bool) {
-	if len(cfg.DirectDNS) > 0 {
-		if ip, ok := resolvePhase(domain, cfg.DirectDNS, false, cfg); ok {
-			return ip, true
-		}
-		logger.Printf("%s: direct DNS phase produced no working IP", domain)
-	}
-
-	if len(cfg.ProxyDNS) > 0 {
-		if strings.TrimSpace(cfg.DNSSOCKS5Addr) == "" {
-			logger.Printf("%s: proxy DNS configured but SOCKS5 address is empty", domain)
-		} else if ip, ok := resolvePhase(domain, cfg.ProxyDNS, true, cfg); ok {
-			return ip, true
-		}
-		logger.Printf("%s: proxy DNS phase produced no working IP", domain)
-	}
-
-	return "", false
+	return resolveAndSelectWith(domain, cfg, queryResolver, testTCP, testTLS, pingIPFn)
 }
 
-func resolvePhase(domain string, servers []string, throughSOCKS bool, cfg Config) (string, bool) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+type resolverQueryFunc func(context.Context, string, string, bool, Config) []string
+type ipProbeFunc func(context.Context, string, string, Config) bool
+type icmpProbeFunc func(string) bool
 
-	candidates := make(chan string, 64)
-	var resolverWG sync.WaitGroup
-	var dedupMu sync.Mutex
-	seen := make(map[string]bool)
+type resolverTarget struct {
+	server       string
+	throughSOCKS bool
+}
 
-	for _, server := range servers {
-		server := strings.TrimSpace(server)
-		if server == "" {
-			continue
-		}
-
-		resolverWG.Add(1)
-		go func() {
-			defer resolverWG.Done()
-
-			var ips []string
-			if strings.HasPrefix(strings.ToLower(server), "https://") || strings.HasPrefix(strings.ToLower(server), "http://") {
-				if throughSOCKS {
-					ips = queryDoHSOCKS5(ctx, domain, server, cfg.DNSSOCKS5Addr)
-				} else {
-					logger.Printf("%s: ignoring DoH resolver in direct DNS section: %s", domain, server)
+func resolveAndSelectWith(domain string, cfg Config, query resolverQueryFunc, tcpCheck ipProbeFunc, tlsCheck ipProbeFunc, pingCheck icmpProbeFunc) (string, bool) {
+	ips := collectResolverIPs(domain, cfg, query)
+	if cfg.CacheTTL > 0 {
+		if entry, ok := getCache(domain); ok {
+			if time.Since(entry.Checked) < cfg.CacheTTL {
+				if parsed := net.ParseIP(entry.IP); parsed != nil && parsed.To4() != nil {
+					cachedIP := parsed.To4().String()
+					found := false
+					for _, ip := range ips {
+						if ip == cachedIP {
+							found = true
+							break
+						}
+					}
+					if !found {
+						ips = append(ips, cachedIP)
+					}
 				}
 			} else {
-				if _, _, err := net.SplitHostPort(server); err != nil {
-					server = net.JoinHostPort(server, "53")
-				}
-				if throughSOCKS {
-					ips = queryDNSSOCKS5(ctx, domain, cfg.DNSSOCKS5Addr, server)
-				} else {
-					ips = queryDNS(ctx, domain, server)
-				}
+				deleteCache(domain)
 			}
+		}
+	}
+	if len(ips) == 0 {
+		logger.Printf("%s: no resolver returned IPv4 addresses", domain)
+		return "", false
+	}
+	logger.Printf("%s: collected %d unique IPv4 candidates", domain, len(ips))
 
-			if len(ips) == 0 {
-				logger.Printf("%s: %s returned no IPv4 addresses", domain, server)
-				return
+	ctx := context.Background()
+	tcpResults := runIPChecks(ctx, ips, cfg.MaxParallelTests, func(ip string) bool {
+		logger.Printf("%s: TCP testing %s", domain, ip)
+		return tcpCheck(ctx, domain, ip, cfg)
+	})
+
+	var tcpReachable, tcpFailed []string
+	for _, ip := range ips {
+		if tcpResults[ip] {
+			tcpReachable = append(tcpReachable, ip)
+			recordReachableIP(ip)
+		} else {
+			tcpFailed = append(tcpFailed, ip)
+		}
+	}
+
+	icmpResults := runIPChecks(ctx, tcpFailed, cfg.MaxParallelTests, func(ip string) bool {
+		logger.Printf("%s: ICMP testing %s after TCP failure", domain, ip)
+		return pingCheck(ip)
+	})
+	for _, ip := range tcpFailed {
+		if icmpResults[ip] {
+			recordReachableIP(ip)
+		} else {
+			recordUnreachableIP(ip)
+		}
+	}
+
+	tlsResults := runIPChecks(ctx, tcpReachable, cfg.MaxParallelTests, func(ip string) bool {
+		logger.Printf("%s: TLS testing %s", domain, ip)
+		return tlsCheck(ctx, domain, ip, cfg)
+	})
+	selectedIP := ""
+	for _, ip := range tcpReachable {
+		if tlsResults[ip] {
+			recordReachableHost(domain, ip)
+			if selectedIP == "" {
+				selectedIP = ip
 			}
+		}
+	}
+	if selectedIP == "" {
+		deleteCache(domain)
+	}
+	return selectedIP, selectedIP != ""
+}
 
-			logger.Printf("%s: %s returned %d IPv4 addresses", domain, server, len(ips))
-
-			for _, ip := range ips {
-				dedupMu.Lock()
-				if seen[ip] {
-					dedupMu.Unlock()
-					continue
-				}
-				seen[ip] = true
-				dedupMu.Unlock()
-
-				select {
-				case candidates <- ip:
-				case <-ctx.Done():
-					return
-				}
+func collectResolverIPs(domain string, cfg Config, query resolverQueryFunc) []string {
+	targets := make([]resolverTarget, 0, len(cfg.DirectDNS)+len(cfg.ProxyDNS))
+	for _, server := range cfg.DirectDNS {
+		targets = append(targets, resolverTarget{server: server})
+	}
+	for _, server := range cfg.ProxyDNS {
+		targets = append(targets, resolverTarget{server: server, throughSOCKS: true})
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(cfg.DNSSOCKS5Addr) == "" {
+		filtered := targets[:0]
+		for _, target := range targets {
+			if !target.throughSOCKS {
+				filtered = append(filtered, target)
 			}
+		}
+		targets = filtered
+	}
+	if len(targets) == 0 {
+		logger.Printf("%s: proxy DNS configured but SOCKS5 address is empty", domain)
+		return nil
+	}
+
+	timeout := cfg.DNSTimeout
+	if timeout <= 0 {
+		timeout = defaultDNSTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	results := make(chan []string, len(targets))
+	for _, target := range targets {
+		target := target
+		go func() {
+			results <- query(ctx, domain, target.server, target.throughSOCKS, cfg)
 		}()
 	}
 
-	go func() {
-		resolverWG.Wait()
-		close(candidates)
-	}()
+	seen := make(map[string]bool)
+	var ips []string
+	for range targets {
+		for _, value := range <-results {
+			parsed := net.ParseIP(strings.TrimSpace(value))
+			if parsed == nil || parsed.To4() == nil {
+				continue
+			}
+			ip := parsed.To4().String()
+			if seen[ip] {
+				continue
+			}
+			seen[ip] = true
+			ips = append(ips, ip)
+		}
+	}
+	return ips
+}
 
+func queryResolver(ctx context.Context, domain string, server string, throughSOCKS bool, cfg Config) []string {
+	server = strings.TrimSpace(server)
+	if server == "" {
+		return nil
+	}
+	if strings.HasPrefix(strings.ToLower(server), "https://") || strings.HasPrefix(strings.ToLower(server), "http://") {
+		if throughSOCKS {
+			return queryDoHSOCKS5(ctx, domain, server, cfg.DNSSOCKS5Addr)
+		}
+		logger.Printf("%s: ignoring DoH resolver in direct DNS section: %s", domain, server)
+		return nil
+	}
+	if _, _, err := net.SplitHostPort(server); err != nil {
+		server = net.JoinHostPort(server, "53")
+	}
+	if throughSOCKS {
+		return queryDNSSOCKS5(ctx, domain, cfg.DNSSOCKS5Addr, server)
+	}
+	return queryDNS(ctx, domain, server, cfg)
+}
+
+func runIPChecks(ctx context.Context, ips []string, parallel int, check func(string) bool) map[string]bool {
+	results := make(map[string]bool, len(ips))
+	if len(ips) == 0 {
+		return results
+	}
+	if parallel <= 0 {
+		parallel = defaultMaxParallel
+	}
+	if parallel > len(ips) {
+		parallel = len(ips)
+	}
 	type result struct {
 		ip string
 		ok bool
 	}
-	parallel := currentConfig.MaxParallelTests
-	if parallel <= 0 {
-		parallel = defaultMaxParallel
-	}
-
-	results := make(chan result, parallel)
-	var workerWG sync.WaitGroup
-
+	jobs := make(chan string)
+	completed := make(chan result, len(ips))
+	var workers sync.WaitGroup
 	for i := 0; i < parallel; i++ {
-		workerWG.Add(1)
+		workers.Add(1)
 		go func() {
-			defer workerWG.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case ip, ok := <-candidates:
-					if !ok {
-						return
-					}
-					if ctx.Err() != nil {
-						return
-					}
-					logger.Printf("%s: testing %s", domain, ip)
-					if testIP(ctx, domain, ip) {
-						recordReachableHost(domain, ip)
-						results <- result{ip: ip, ok: true}
-						cancel()
-						return
-					}
-					if ctx.Err() != nil {
-						return
-					}
-					recordUnreachableHost(ctx, domain, ip)
-					logger.Printf("%s: %s FAILED", domain, ip)
-				}
+			defer workers.Done()
+			for ip := range jobs {
+				completed <- result{ip: ip, ok: check(ip)}
 			}
 		}()
 	}
-
 	go func() {
-		workerWG.Wait()
-		close(results)
-	}()
-
-	for r := range results {
-		if r.ok {
-			logger.Printf("%s: FIRST WORKING IP = %s", domain, r.ip)
-			cancel()
-			return r.ip, true
+		for _, ip := range ips {
+			jobs <- ip
 		}
+		close(jobs)
+		workers.Wait()
+		close(completed)
+	}()
+	for result := range completed {
+		results[result.ip] = result.ok
 	}
-
-	cancel()
-	return "", false
+	return results
 }
 
-func queryDNS(ctx context.Context, domain string, server string) []string {
+func queryDNS(ctx context.Context, domain string, server string, cfg Config) []string {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(domain), dns.TypeA)
 	msg.RecursionDesired = true
 
-	timeout := currentConfig.DNSTimeout
+	timeout := cfg.DNSTimeout
 	if timeout <= 0 {
 		timeout = defaultDNSTimeout
 	}
 
-	client := &dns.Client{Timeout: timeout}
+	client, err := newDNSClient(timeout, cfg.DNSInterface, server)
+	if err != nil {
+		logger.Printf("%s: invalid DNS interface selection: %v", domain, err)
+		return nil
+	}
 	resp, _, err := client.ExchangeContext(ctx, msg, server)
 	if err != nil {
 		return nil
@@ -431,7 +475,12 @@ func forwardDNS(w dns.ResponseWriter, req *dns.Msg, server string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	client := &dns.Client{Timeout: timeout}
+	client, err := newDNSClient(timeout, currentConfig.DNSInterface, server)
+	if err != nil {
+		logger.Printf("invalid DNS interface selection: %v", err)
+		dns.HandleFailed(w, req)
+		return
+	}
 	resp, _, err := client.ExchangeContext(ctx, req, server)
 	if err != nil {
 		logger.Printf("forward DNS to %s failed: %v", server, err)

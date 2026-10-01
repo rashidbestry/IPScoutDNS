@@ -1,9 +1,10 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -13,11 +14,23 @@ var (
 	writtenReachable          = make(map[string]bool)
 	writtenReachableDomains   = make(map[string]bool)
 	writtenReachableIPs       = make(map[string]bool)
-	writtenUnreachable        = make(map[string]bool)
 	writtenUnreachableDomains = make(map[string]bool)
 	writtenUnreachableIPs     = make(map[string]bool)
-	resolvedDomains           = make(map[string]bool)
+	pingIPFn                  = pingIP
 )
+
+func pingIP(ip string) bool {
+	if ip == "" {
+		return false
+	}
+
+	args := []string{"-c", "1", "-W", "1", ip}
+	if runtime.GOOS == "windows" {
+		args = []string{"-n", "1", "-w", "1000", ip}
+	}
+	_, err := exec.Command("ping", args...).CombinedOutput()
+	return err == nil
+}
 
 func appendUniqueLine(path string, value string, seen map[string]bool) {
 	if path == "" {
@@ -83,7 +96,7 @@ func removeLineLocked(path string, value string, seen map[string]bool) {
 	delete(seen, path+"\x00"+value)
 }
 
-func recordHost(path string, domain string, ip string, isReachable bool) {
+func recordHost(path string, domain string, ip string) {
 	if path == "" {
 		return
 	}
@@ -92,17 +105,10 @@ func recordHost(path string, domain string, ip string, isReachable bool) {
 	hostsMu.Lock()
 	defer hostsMu.Unlock()
 
-	if isReachable {
-		if writtenReachable[key] {
-			return
-		}
-		writtenReachable[key] = true
-	} else {
-		if writtenUnreachable[key] {
-			return
-		}
-		writtenUnreachable[key] = true
+	if writtenReachable[key] {
+		return
 	}
+	writtenReachable[key] = true
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -113,19 +119,34 @@ func recordHost(path string, domain string, ip string, isReachable bool) {
 	fmt.Fprintf(f, "%s %s\n", ip, domain)
 }
 
-func recordReachableHost(domain string, ip string) {
+func recordReachableIP(ip string) {
 	hostsMu.Lock()
-	resolvedDomains[domain] = true
-	removeLineLocked(currentConfig.UnreachableDomainsFile, domain, writtenUnreachableDomains)
-	hostsMu.Unlock()
+	defer hostsMu.Unlock()
+	removeLineLocked(currentConfig.UnreachableIPsFile, ip, writtenUnreachableIPs)
+	appendUniqueLineLocked(currentConfig.ReachableIPsFile, ip, writtenReachableIPs)
+}
 
-	recordHost(currentConfig.ReachableHostsFile, domain, ip, true)
-	if currentConfig.ReachableDomainsFile != "" {
-		appendUniqueLine(currentConfig.ReachableDomainsFile, domain, writtenReachableDomains)
+func recordUnreachableIP(ip string) {
+	hostsMu.Lock()
+	defer hostsMu.Unlock()
+	removeLineLocked(currentConfig.ReachableIPsFile, ip, writtenReachableIPs)
+	appendUniqueLineLocked(currentConfig.UnreachableIPsFile, ip, writtenUnreachableIPs)
+}
+
+func recordReachableDomain(domain string) {
+	if domain == "" {
+		return
 	}
-	if currentConfig.ReachableIPsFile != "" {
-		appendUniqueLine(currentConfig.ReachableIPsFile, ip, writtenReachableIPs)
-	}
+	hostsMu.Lock()
+	defer hostsMu.Unlock()
+	removeLineLocked(currentConfig.UnreachableDomainsFile, domain, writtenUnreachableDomains)
+	appendUniqueLineLocked(currentConfig.ReachableDomainsFile, domain, writtenReachableDomains)
+}
+
+func recordReachableHost(domain string, ip string) {
+	recordHost(currentConfig.ReachableHostsFile, domain, ip)
+	recordReachableDomain(domain)
+	recordReachableIP(ip)
 }
 
 func recordDomainUnreachable(domain string) {
@@ -134,20 +155,6 @@ func recordDomainUnreachable(domain string) {
 	}
 	hostsMu.Lock()
 	defer hostsMu.Unlock()
-	if resolvedDomains[domain] {
-		return
-	}
+	removeLineLocked(currentConfig.ReachableDomainsFile, domain, writtenReachableDomains)
 	appendUniqueLineLocked(currentConfig.UnreachableDomainsFile, domain, writtenUnreachableDomains)
-}
-
-func recordUnreachableHost(ctx context.Context, domain string, ip string) {
-	if ctx.Err() != nil {
-		return
-	}
-	if currentConfig.UnreachableHostsFile != "" {
-		recordHost(currentConfig.UnreachableHostsFile, domain, ip, false)
-	}
-	if currentConfig.UnreachableIPsFile != "" {
-		appendUniqueLine(currentConfig.UnreachableIPsFile, ip, writtenUnreachableIPs)
-	}
 }

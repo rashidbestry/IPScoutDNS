@@ -63,14 +63,14 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 		logger.Printf("%s: cached IP expired: %s", domain, entry.IP)
 		if testCachedIP(domain, entry.IP) {
 			logger.Printf("%s: cached IP still reachable: %s", domain, entry.IP)
-			recordHost(currentConfig.ReachableHostsFile, domain, entry.IP, true)
+			recordReachableHost(domain, entry.IP)
 			updateCache(domain, entry.IP)
 			replyIP(w, req, entry.IP)
 			return
 		}
 
 		logger.Printf("%s: cached IP FAILED: %s", domain, entry.IP)
-		recordUnreachableHost(domain, entry.IP)
+		recordUnreachableHost(context.Background(), domain, entry.IP)
 		deleteCache(domain)
 	}
 
@@ -219,16 +219,15 @@ func resolvePhase(domain string, servers []string, throughSOCKS bool, cfg Config
 					}
 					logger.Printf("%s: testing %s", domain, ip)
 					if testIP(ctx, domain, ip) {
-						markDomainResolved(domain)
-						recordHost(currentConfig.ReachableHostsFile, domain, ip, true)
+						recordReachableHost(domain, ip)
+						results <- result{ip: ip, ok: true}
 						cancel()
-						select {
-						case results <- result{ip: ip, ok: true}:
-						case <-ctx.Done():
-						}
 						return
 					}
-					recordUnreachableHost(domain, ip)
+					if ctx.Err() != nil {
+						return
+					}
+					recordUnreachableHost(ctx, domain, ip)
 					logger.Printf("%s: %s FAILED", domain, ip)
 				}
 			}

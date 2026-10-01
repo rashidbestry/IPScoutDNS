@@ -1,10 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 )
@@ -12,43 +11,26 @@ import (
 var (
 	hostsMu                   sync.Mutex
 	writtenReachable          = make(map[string]bool)
+	writtenReachableDomains   = make(map[string]bool)
+	writtenReachableIPs       = make(map[string]bool)
 	writtenUnreachable        = make(map[string]bool)
 	writtenUnreachableDomains = make(map[string]bool)
 	writtenUnreachableIPs     = make(map[string]bool)
 	resolvedDomains           = make(map[string]bool)
-	pingIPFn                  = pingIP
 )
-
-func pingIP(ip string) bool {
-	if ip == "" {
-		return false
-	}
-
-	cmdArgs := []string{"-c", "1", "-W", "1", ip}
-	if runtime.GOOS == "windows" {
-		cmdArgs = []string{"-n", "1", "-w", "1000", ip}
-	}
-
-	cmd := exec.Command("ping", cmdArgs...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		logger.Printf("ping %s failed: %v (%s)", ip, err, strings.TrimSpace(string(output)))
-		return false
-	}
-
-	result := strings.ToLower(string(output))
-	return strings.Contains(result, "reply from") || strings.Contains(result, "bytes from")
-}
 
 func appendUniqueLine(path string, value string, seen map[string]bool) {
 	if path == "" {
 		return
 	}
 
-	key := path + "\x00" + value
 	hostsMu.Lock()
 	defer hostsMu.Unlock()
+	appendUniqueLineLocked(path, value, seen)
+}
 
+func appendUniqueLineLocked(path string, value string, seen map[string]bool) {
+	key := path + "\x00" + value
 	if seen[key] {
 		return
 	}
@@ -61,6 +43,44 @@ func appendUniqueLine(path string, value string, seen map[string]bool) {
 	}
 	defer f.Close()
 	fmt.Fprintln(f, value)
+}
+
+func removeLineLocked(path string, value string, seen map[string]bool) {
+	if path == "" {
+		return
+	}
+
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.Printf("failed to read domains file %s: %v", path, err)
+		}
+		return
+	}
+
+	lines := strings.Split(strings.TrimSuffix(string(contents), "\n"), "\n")
+	filtered := lines[:0]
+	removed := false
+	for _, line := range lines {
+		if strings.TrimSuffix(line, "\r") == value {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	if !removed {
+		return
+	}
+
+	updated := strings.Join(filtered, "\n")
+	if updated != "" {
+		updated += "\n"
+	}
+	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+		logger.Printf("failed to update domains file %s: %v", path, err)
+		return
+	}
+	delete(seen, path+"\x00"+value)
 }
 
 func recordHost(path string, domain string, ip string, isReachable bool) {
@@ -93,49 +113,39 @@ func recordHost(path string, domain string, ip string, isReachable bool) {
 	fmt.Fprintf(f, "%s %s\n", ip, domain)
 }
 
-func markDomainResolved(domain string) {
-	if domain == "" {
-		return
-	}
+func recordReachableHost(domain string, ip string) {
 	hostsMu.Lock()
-	defer hostsMu.Unlock()
 	resolvedDomains[domain] = true
-}
+	removeLineLocked(currentConfig.UnreachableDomainsFile, domain, writtenUnreachableDomains)
+	hostsMu.Unlock()
 
-func isDomainResolved(domain string) bool {
-	if domain == "" {
-		return false
+	recordHost(currentConfig.ReachableHostsFile, domain, ip, true)
+	if currentConfig.ReachableDomainsFile != "" {
+		appendUniqueLine(currentConfig.ReachableDomainsFile, domain, writtenReachableDomains)
 	}
-	hostsMu.Lock()
-	defer hostsMu.Unlock()
-	return resolvedDomains[domain]
+	if currentConfig.ReachableIPsFile != "" {
+		appendUniqueLine(currentConfig.ReachableIPsFile, ip, writtenReachableIPs)
+	}
 }
 
 func recordDomainUnreachable(domain string) {
-	if domain == "" || isDomainResolved(domain) {
+	if domain == "" {
 		return
 	}
-	if currentConfig.UnreachableDomainsFile != "" {
-		appendUniqueLine(currentConfig.UnreachableDomainsFile, domain, writtenUnreachableDomains)
+	hostsMu.Lock()
+	defer hostsMu.Unlock()
+	if resolvedDomains[domain] {
+		return
 	}
+	appendUniqueLineLocked(currentConfig.UnreachableDomainsFile, domain, writtenUnreachableDomains)
 }
 
-func recordUnreachableHost(domain string, ip string) {
-	if isDomainResolved(domain) {
-		return
-	}
-	if ip == "" {
-		recordDomainUnreachable(domain)
-		return
-	}
-	if pingIPFn(ip) {
+func recordUnreachableHost(ctx context.Context, domain string, ip string) {
+	if ctx.Err() != nil {
 		return
 	}
 	if currentConfig.UnreachableHostsFile != "" {
 		recordHost(currentConfig.UnreachableHostsFile, domain, ip, false)
-	}
-	if currentConfig.UnreachableDomainsFile != "" {
-		appendUniqueLine(currentConfig.UnreachableDomainsFile, domain, writtenUnreachableDomains)
 	}
 	if currentConfig.UnreachableIPsFile != "" {
 		appendUniqueLine(currentConfig.UnreachableIPsFile, ip, writtenUnreachableIPs)

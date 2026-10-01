@@ -35,7 +35,7 @@ type Config struct {
 	FallbackDNS            string
 	SOCKS5Addr             string // legacy alias for DNSSOCKS5Addr
 	DNSSOCKS5Addr          string // SOCKS5 proxy used for DNS resolvers
-	TLSSOCKS5Addr          string // SOCKS5 proxy used for TLS reachability checks
+	TLSSOCKS5Addr          string // SOCKS5 proxy used for reachability checks
 	TLSProxyPort           int
 	CacheTTL               time.Duration
 	DNSTimeout             time.Duration
@@ -46,6 +46,8 @@ type Config struct {
 	AnswerTTL              uint32
 	ShutdownTimeout        time.Duration
 	ReachableHostsFile     string
+	ReachableDomainsFile   string
+	ReachableIPsFile       string
 	UnreachableHostsFile   string
 	UnreachableDomainsFile string
 	UnreachableIPsFile     string
@@ -328,6 +330,10 @@ func loadConfig(path string) (Config, error) {
 					cfg.ShutdownTimeout = d
 				case "reachable_hosts":
 					cfg.ReachableHostsFile = value
+				case "reachable_domains_file", "reachable_domains":
+					cfg.ReachableDomainsFile = value
+				case "reachable_ips_file", "reachable_ips":
+					cfg.ReachableIPsFile = value
 				case "unreachable_hosts":
 					cfg.UnreachableHostsFile = value
 				case "unreachable_domains_file", "unreachable_domains":

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"net"
 	"strconv"
 )
@@ -21,33 +20,14 @@ func testIP(parent context.Context, domain string, ip string) bool {
 		port = "443"
 	}
 
-	tlsConfig := &tls.Config{
-		ServerName:         domain,
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: true,
-	}
-
 	var conn net.Conn
 	var err error
-	
 	targetAddr := net.JoinHostPort(ip, port)
 
 	if currentConfig.TLSRoute == "proxy" {
 		conn, err = dialSOCKS5(ctx, currentConfig.TLSSOCKS5Addr, targetAddr)
-		if err == nil {
-			tlsConn := tls.Client(conn, tlsConfig)
-			err = tlsConn.HandshakeContext(ctx)
-			if err != nil {
-				conn.Close()
-			} else {
-				conn = tlsConn
-			}
-		}
 	} else {
-		dialer := &tls.Dialer{
-			NetDialer: &net.Dialer{},
-			Config:    tlsConfig,
-		}
+		dialer := &net.Dialer{}
 		conn, err = dialer.DialContext(ctx, "tcp", targetAddr)
 	}
 

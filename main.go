@@ -62,14 +62,10 @@ func main() {
 	}
 
 	currentConfig = cfg
-	if !cfg.LogsEnabled {
-		logger.SetOutput(io.Discard)
-	}
 	if cfg.DomainsFile != "" {
 		if err := loadDomainsFile(cfg.DomainsFile); err != nil {
 			logger.Fatalf("failed to load domains file: %v", err)
 		}
-		logger.Printf("loaded %d domain filters from %s", len(domainRegexes), cfg.DomainsFile)
 	}
 
 	logger.Printf("starting IPScoutDNS v3")
@@ -84,13 +80,18 @@ func main() {
 	logger.Printf("TLS timeout: %s", cfg.TLSTimeout)
 	logger.Printf("TLS port: %d", cfg.TLSPort)
 	logger.Printf("TLS route: %s", cfg.TLSRoute)
-	if cfg.TLSRoute == "interface" {
-		logger.Printf("TLS interface: %s", cfg.TLSInterface)
+	if cfg.TLSRoute == "direct" {
+		logger.Printf("direct TCP interface: %s", configuredOrDefault(cfg.DirectTCPInterface))
 	}
 	logger.Printf("TLS SOCKS5 proxy: %s", cfg.TLSSOCKS5Addr)
 	logger.Printf("parallel TLS tests: %d", cfg.MaxParallelTests)
 	logger.Printf("answer TTL: %d", cfg.AnswerTTL)
-	logger.Printf("shutdown timeout: %s", cfg.ShutdownTimeout)
+	if cfg.DomainsFile != "" {
+		logger.Printf("loaded %d domain filters from %s", len(domainRegexes), cfg.DomainsFile)
+	}
+	if !cfg.LogsEnabled {
+		logger.SetOutput(io.Discard)
+	}
 
 	handler := dns.HandlerFunc(handleDNS)
 	udpServer := &dns.Server{Addr: cfg.ListenAddr, Net: "udp", Handler: handler}
@@ -115,10 +116,6 @@ func main() {
 
 	<-ctx.Done()
 	logger.Printf("shutdown signal received, stopping DNS servers")
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-	defer shutdownCancel()
-	_ = shutdownCtx
 
 	if err := udpServer.Shutdown(); err != nil {
 		logger.Printf("UDP shutdown error: %v", err)

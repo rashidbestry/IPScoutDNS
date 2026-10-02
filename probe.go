@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"strconv"
 )
@@ -50,14 +51,14 @@ func dialReachability(ctx context.Context, domain string, ip string, cfg Config)
 	switch cfg.TLSRoute {
 	case "proxy":
 		return dialSOCKS5(ctx, cfg.TLSSOCKS5Addr, targetAddr)
-	case "interface":
-		localAddr, err := localAddrForInterface(cfg.TLSInterface, "tcp", targetAddr)
+	case "direct":
+		localAddr, err := localAddrForInterface(cfg.DirectTCPInterface, "tcp", targetAddr)
 		if err != nil {
-			logger.Printf("%s: invalid TLS interface selection: %v", domain, err)
+			logger.Printf("%s: invalid direct TCP interface selection: %v", domain, err)
 			return nil, err
 		}
 		return (&net.Dialer{LocalAddr: localAddr}).DialContext(ctx, "tcp", targetAddr)
 	default:
-		return (&net.Dialer{}).DialContext(ctx, "tcp", targetAddr)
+		return nil, fmt.Errorf("unsupported TCP route %q", cfg.TLSRoute)
 	}
 }

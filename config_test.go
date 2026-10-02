@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -69,6 +70,118 @@ func TestResolveConfigPathWith(t *testing.T) {
 				t.Fatalf("resolveConfigPathWith() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestSampleConfigUsesTCPReachabilitySettings(t *testing.T) {
+	cfg, err := loadConfig("ipscoutdns.conf")
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if cfg.TLSTimeout.String() != "3s" {
+		t.Errorf("TLSTimeout = %s, want 3s", cfg.TLSTimeout)
+	}
+	if cfg.TLSPort != 443 {
+		t.Errorf("TLSPort = %d, want 443", cfg.TLSPort)
+	}
+	if cfg.TLSRoute != "proxy" {
+		t.Errorf("TLSRoute = %q, want proxy", cfg.TLSRoute)
+	}
+	if cfg.TLSSOCKS5Addr != "127.0.0.1:1080" {
+		t.Errorf("TLSSOCKS5Addr = %q, want 127.0.0.1:1080", cfg.TLSSOCKS5Addr)
+	}
+	if cfg.DirectTCPInterface != "default" {
+		t.Errorf("DirectTCPInterface = %q, want default", cfg.DirectTCPInterface)
+	}
+}
+
+func TestDirectTCPInterfaceConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ipscoutdns.conf")
+	contents := `direct_dns=1.1.1.1
+tcp_route=direct
+direct_tcp_interface=127.0.0.1
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if cfg.DirectTCPInterface != "127.0.0.1" {
+		t.Fatalf("DirectTCPInterface = %q, want 127.0.0.1", cfg.DirectTCPInterface)
+	}
+}
+
+func TestFlatFormatConfigLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ipscoutdns.conf")
+	contents := `server=127.0.0.1:53
+logs_enabled=true
+ttl=24h
+
+direct_dns={
+    8.8.8.8,
+    1.1.1.1,
+}
+proxy_dns={
+    9.9.9.9,
+    208.67.222.222,
+}
+proxy_dns_address=127.0.0.1:1080
+fallback_dns=8.8.8.8:53
+dns_timeout=3s
+answer_ttl=300
+
+tcp_port=443
+tcp_route=proxy
+tcp_proxy=127.0.0.1:1080
+parallel_tests=16
+tcp_timeout=3s
+
+domains_file=domains.txt
+reachable_hosts=reachable.hosts
+reachable_domains_file=reachable.domains
+reachable_ips_file=reachable.ips
+unreachable_domains_file=unreachable.domains
+unreachable_ips_file=unreachable.ips
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if cfg.ListenAddr != "127.0.0.1:53" {
+		t.Fatalf("ListenAddr = %q, want 127.0.0.1:53", cfg.ListenAddr)
+	}
+	if cfg.FallbackDNS != "8.8.8.8:53" {
+		t.Fatalf("FallbackDNS = %q, want 8.8.8.8:53", cfg.FallbackDNS)
+	}
+	if cfg.TLSRoute != "proxy" {
+		t.Fatalf("TLSRoute = %q, want proxy", cfg.TLSRoute)
+	}
+	if cfg.DNSSOCKS5Addr != "127.0.0.1:1080" {
+		t.Fatalf("DNSSOCKS5Addr = %q, want 127.0.0.1:1080", cfg.DNSSOCKS5Addr)
+	}
+	if len(cfg.DirectDNS) != 2 || cfg.DirectDNS[0] != "8.8.8.8" || cfg.DirectDNS[1] != "1.1.1.1" {
+		t.Fatalf("DirectDNS = %#v, want [8.8.8.8 1.1.1.1]", cfg.DirectDNS)
+	}
+}
+
+func TestFlatFormatRejectsInterfaceTCPRoute(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ipscoutdns.conf")
+	contents := `direct_dns=1.1.1.1
+tcp_route=interface
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := loadConfig(path); err == nil {
+		t.Fatal("loadConfig() accepted unsupported tcp_route=interface")
 	}
 }
 

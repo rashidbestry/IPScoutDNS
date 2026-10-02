@@ -11,7 +11,7 @@ import (
 
 func validateInterfaceSelector(selector string) error {
 	selector = strings.TrimSpace(selector)
-	if selector == "" || net.ParseIP(selector) != nil {
+	if selector == "" || strings.EqualFold(selector, "default") || net.ParseIP(selector) != nil {
 		return nil
 	}
 	if _, err := net.InterfaceByName(selector); err != nil {
@@ -22,7 +22,7 @@ func validateInterfaceSelector(selector string) error {
 
 func localAddrForInterface(selector string, network string, remoteAddr string) (net.Addr, error) {
 	selector = strings.TrimSpace(selector)
-	if selector == "" {
+	if selector == "" || strings.EqualFold(selector, "default") {
 		return nil, nil
 	}
 

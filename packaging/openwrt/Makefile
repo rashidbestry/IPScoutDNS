@@ -23,6 +23,7 @@ endef
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
 	$(CP) ./files/ipscoutdns $(PKG_BUILD_DIR)/ipscoutdns
+	python3 ./generate-config.py ./files/ipscoutdns.conf $(PKG_BUILD_DIR)/ipscoutdns.conf
 endef
 
 define Build/Configure
@@ -40,7 +41,7 @@ define Package/ipscoutdns/install
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ipscoutdns $(1)/usr/bin/ipscoutdns
 	$(INSTALL_DIR) $(1)/etc/ipscoutdns
-	$(INSTALL_CONF) ./files/ipscoutdns.conf $(1)/etc/ipscoutdns.conf
+	$(INSTALL_CONF) $(PKG_BUILD_DIR)/ipscoutdns.conf $(1)/etc/ipscoutdns.conf
 	$(INSTALL_CONF) ./files/domains.txt $(1)/etc/ipscoutdns/domains.txt
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/ipscoutdns.init $(1)/etc/init.d/ipscoutdns

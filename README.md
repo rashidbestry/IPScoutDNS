@@ -52,7 +52,7 @@ The package installs the binary at `/usr/bin/ipscoutdns`, config at `/etc/ipscou
 /etc/init.d/ipscoutdns start
 ```
 
-The OpenWrt config listens on `127.0.0.1:5354` to avoid conflicting with dnsmasq. The package does not modify dnsmasq settings; configure DNS forwarding separately if desired.
+The package generates its OpenWrt config from the root `ipscoutdns.conf`, applying router-specific listener, route, and file-path overrides during packaging. The generated config listens on `127.0.0.1:5354` to avoid conflicting with dnsmasq. The package does not modify dnsmasq settings; configure DNS forwarding separately if desired.
 
 All writable runtime output files are configured under `/tmp/ipscoutdns/`. The service creates this directory at startup. OpenWrt clears `/tmp` on reboot. The package uses the router's `/bin/ping` and depends on `ca-bundle` for TLS certificate validation.
 

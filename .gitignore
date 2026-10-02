@@ -3,3 +3,4 @@
 *.domains
 *.ips
 *.md
+!README.md

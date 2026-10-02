@@ -1,0 +1,83 @@
+name: OpenWrt package
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (with or without a leading v)
+        required: false
+        default: 0.0.1
+        type: string
+  pull_request:
+    paths:
+      - "*.go"
+      - go.mod
+      - go.sum
+      - packaging/openwrt/**
+      - .github/workflows/openwrt-package.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build rockchip/armv8 APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install SDK extraction dependency
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y zstd
+      - name: Build Linux ARM64 binary
+        run: go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/ipscoutdns" .
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: arm64
+      - name: Download OpenWrt SDK
+        run: |
+          sdk_url="https://downloads.openwrt.org/releases/25.12.5/targets/rockchip/armv8/openwrt-sdk-25.12.5-rockchip-armv8_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+          curl --fail --location --silent --show-error "$sdk_url" -o "$RUNNER_TEMP/openwrt-sdk.tar.zst"
+          mkdir -p "$RUNNER_TEMP/openwrt-sdk"
+          tar --zstd -xf "$RUNNER_TEMP/openwrt-sdk.tar.zst" -C "$RUNNER_TEMP/openwrt-sdk" --strip-components=1
+      - name: Stage package and build with SDK
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          sdk_dir="$RUNNER_TEMP/openwrt-sdk"
+          package_dir="$sdk_dir/package/ipscoutdns"
+          mkdir -p "$package_dir"
+          cp -R packaging/openwrt/. "$package_dir/"
+          cp "$RUNNER_TEMP/ipscoutdns" "$package_dir/files/ipscoutdns"
+
+          version="$PACKAGE_VERSION"
+          if [ -z "$version" ]; then
+            version="0.0.1"
+          fi
+          version="${version#v}"
+
+          make -C "$sdk_dir" defconfig
+          make -C "$sdk_dir" package/ipscoutdns/compile V=s PKG_VERSION="$version"
+
+          package_file="$(find "$sdk_dir/bin/packages/aarch64_generic" -type f -name 'ipscoutdns*.apk' -print -quit)"
+          if [ -z "$package_file" ]; then
+            echo "OpenWrt SDK did not produce an APK under aarch64_generic" >&2
+            exit 1
+          fi
+
+          output="ipscoutdns-${version}-rockchip-armv8-aarch64_generic.apk"
+          cp "$package_file" "$output"
+          sha256sum "$output" > "$output.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipscoutdns-openwrt-rockchip-armv8-aarch64_generic
+          path: ipscoutdns-*.apk*
+          if-no-files-found: error

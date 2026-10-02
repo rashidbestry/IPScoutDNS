@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -68,5 +69,34 @@ func TestResolveConfigPathWith(t *testing.T) {
 				t.Fatalf("resolveConfigPathWith() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestOpenWrtPackageConfig(t *testing.T) {
+	cfg, err := loadConfig("packaging/openwrt/files/ipscoutdns.conf")
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if cfg.ListenAddr != "127.0.0.1:5354" {
+		t.Fatalf("ListenAddr = %q, want 127.0.0.1:5354", cfg.ListenAddr)
+	}
+	if cfg.DomainsFile != "/etc/ipscoutdns/domains.txt" {
+		t.Fatalf("DomainsFile = %q, want /etc/ipscoutdns/domains.txt", cfg.DomainsFile)
+	}
+
+	outputs := []struct {
+		name string
+		path string
+	}{
+		{name: "reachable hosts", path: cfg.ReachableHostsFile},
+		{name: "reachable domains", path: cfg.ReachableDomainsFile},
+		{name: "reachable IPs", path: cfg.ReachableIPsFile},
+		{name: "unreachable domains", path: cfg.UnreachableDomainsFile},
+		{name: "unreachable IPs", path: cfg.UnreachableIPsFile},
+	}
+	for _, output := range outputs {
+		if !strings.HasPrefix(output.path, "/tmp/ipscoutdns/") {
+			t.Errorf("%s output path = %q, want path under /tmp/ipscoutdns/", output.name, output.path)
+		}
 	}
 }

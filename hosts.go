@@ -1,12 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
@@ -24,11 +25,9 @@ func pingIP(ip string) bool {
 		return false
 	}
 
-	args := []string{"-c", "1", "-W", "1", ip}
-	if runtime.GOOS == "windows" {
-		args = []string{"-n", "1", "-w", "1000", ip}
-	}
-	_, err := exec.Command("ping", args...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := exec.CommandContext(ctx, "ping", pingArgs(ip)...).CombinedOutput()
 	return err == nil
 }
 

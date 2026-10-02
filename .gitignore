@@ -1,5 +1,5 @@
-ipscoutdns.exe
-*_test.go
+*.exe
 *.hosts
 *.domains
 *.ips
+*.md

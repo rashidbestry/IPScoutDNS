@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -135,19 +137,42 @@ func (c Config) validate() error {
 }
 
 func resolveConfigPath() string {
-	if value := strings.TrimSpace(os.Getenv("IPSCOUTDNS_CONFIG")); value != "" {
-		return value
+	userConfigDir, _ := os.UserConfigDir()
+	return resolveConfigPathWith(
+		strings.TrimSpace(os.Getenv("IPSCOUTDNS_CONFIG")),
+		strings.TrimSpace(os.Getenv("IPSELECTOR_CONFIG")),
+		priorityConfigPath,
+		defaultConfigPath,
+		runtime.GOOS,
+		userConfigDir,
+		func(path string) bool {
+			_, err := os.Stat(path)
+			return err == nil
+		},
+	)
+}
+
+func resolveConfigPathWith(configOverride string, legacyOverride string, localPath string, systemPath string, goos string, userConfigDir string, exists func(string) bool) string {
+	if configOverride != "" {
+		return configOverride
 	}
-	if value := strings.TrimSpace(os.Getenv("IPSELECTOR_CONFIG")); value != "" {
-		return value
+	if legacyOverride != "" {
+		return legacyOverride
 	}
-	if _, err := os.Stat(priorityConfigPath); err == nil {
-		return priorityConfigPath
+	if exists(localPath) {
+		return localPath
 	}
-	if _, err := os.Stat(defaultConfigPath); err == nil {
-		return defaultConfigPath
+	if goos != "windows" && exists(systemPath) {
+		return systemPath
 	}
-	return defaultConfigPath
+	if goos == "windows" {
+		if userConfigDir == "" {
+			return localPath
+		}
+		userConfigPath := filepath.Join(userConfigDir, "IPScoutDNS", "ipscoutdns.conf")
+		return userConfigPath
+	}
+	return systemPath
 }
 
 func loadConfig(path string) (Config, error) {

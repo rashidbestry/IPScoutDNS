@@ -97,7 +97,9 @@ func TestSampleConfigUsesTCPReachabilitySettings(t *testing.T) {
 
 func TestDirectTCPInterfaceConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ipscoutdns.conf")
-	contents := `direct_dns=1.1.1.1
+	contents := `mode=active
+active_domains_file=active-domains.txt
+direct_dns=1.1.1.1
 tcp_route=direct
 direct_tcp_interface=127.0.0.1
 `
@@ -135,7 +137,7 @@ func TestDNSInterfaceConfig(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "ipscoutdns.conf")
-			contents := "direct_dns=1.1.1.1\n" +
+			contents := "mode=active\nactive_domains_file=active-domains.txt\ndirect_dns=1.1.1.1\n" +
 				test.directKey + "=eth1\n" +
 				test.fallbackKey + "=eth0\n"
 			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
@@ -158,7 +160,8 @@ func TestDNSInterfaceConfig(t *testing.T) {
 
 func TestFlatFormatConfigLoads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ipscoutdns.conf")
-	contents := `server=127.0.0.1:53
+	contents := `mode=active
+server=127.0.0.1:53
 logs_enabled=true
 ttl=24h
 
@@ -181,7 +184,7 @@ tcp_proxy=127.0.0.1:1080
 parallel_tests=16
 tcp_timeout=3s
 
-domains_file=domains.txt
+active_domains_file=active-domains.txt
 reachable_hosts=reachable.hosts
 reachable_domains_file=reachable.domains
 reachable_ips_file=reachable.ips
@@ -215,7 +218,9 @@ unreachable_ips_file=unreachable.ips
 
 func TestFlatFormatRejectsInterfaceTCPRoute(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ipscoutdns.conf")
-	contents := `direct_dns=1.1.1.1
+	contents := `mode=active
+active_domains_file=active-domains.txt
+direct_dns=1.1.1.1
 tcp_route=interface
 `
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
@@ -239,8 +244,14 @@ func TestOpenWrtPackageConfig(t *testing.T) {
 	if cfg.ListenAddr != "127.0.0.1:5354" {
 		t.Fatalf("ListenAddr = %q, want 127.0.0.1:5354", cfg.ListenAddr)
 	}
-	if cfg.DomainsFile != "/etc/ipscoutdns/domains.txt" {
-		t.Fatalf("DomainsFile = %q, want /etc/ipscoutdns/domains.txt", cfg.DomainsFile)
+	if cfg.Mode != "active" {
+		t.Fatalf("Mode = %q, want active", cfg.Mode)
+	}
+	if cfg.ActiveDomainsFile != "/etc/ipscoutdns/active-domains.txt" {
+		t.Fatalf("ActiveDomainsFile = %q, want /etc/ipscoutdns/active-domains.txt", cfg.ActiveDomainsFile)
+	}
+	if cfg.PassiveDomainsFile != "/etc/ipscoutdns/passive-domains.txt" {
+		t.Fatalf("PassiveDomainsFile = %q, want /etc/ipscoutdns/passive-domains.txt", cfg.PassiveDomainsFile)
 	}
 	if cfg.TLSRoute != "direct" {
 		t.Fatalf("TLSRoute = %q, want direct", cfg.TLSRoute)

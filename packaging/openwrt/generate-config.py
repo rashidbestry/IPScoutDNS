@@ -22,7 +22,8 @@ REMOVED_KEYS = {
 OVERRIDES = {
     "server": "127.0.0.1:5354",
     "tcp_route": "direct",
-    "domains_file": "/etc/ipscoutdns/domains.txt",
+    "active_domains_file": "/etc/ipscoutdns/active-domains.txt",
+    "passive_domains_file": "/etc/ipscoutdns/passive-domains.txt",
     "reachable_hosts": "/tmp/ipscoutdns/reachable.hosts",
     "reachable_domains_file": "/tmp/ipscoutdns/reachable.domains",
     "reachable_ips_file": "/tmp/ipscoutdns/reachable.ips",

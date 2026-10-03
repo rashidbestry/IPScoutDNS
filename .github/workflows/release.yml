@@ -42,7 +42,7 @@ jobs:
         run: |
           mkdir -p dist
           go build -trimpath -o "dist/${{ matrix.binary }}" .
-          cp ipscoutdns.conf domains.txt dist/
+          cp ipscoutdns.conf ipscoutdns-passive.conf active-domains.txt passive-domains.txt dist/
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}

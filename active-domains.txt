@@ -1,0 +1,2 @@
+# Domains (one hostname per line), Regexes accepted. 
+.*      #all domains

@@ -18,9 +18,6 @@ import (
 )
 
 func isDomainAllowed(domain string) bool {
-	if currentConfig.DomainsFile == "" && len(domainRegexes) == 0 {
-		return true
-	}
 	for _, re := range domainRegexes {
 		if re.MatchString(domain) {
 			return true
@@ -116,6 +113,10 @@ func resolveAndSelectWith(domain string, cfg Config, query resolverQueryFunc, tl
 }
 
 func resolveAndSelectWithStatus(domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, pingCheck icmpProbeFunc) (string, bool, bool) {
+	return resolveAndSelectWithContext(context.Background(), domain, cfg, query, tlsCheck, pingCheck)
+}
+
+func resolveAndSelectWithContext(ctx context.Context, domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, pingCheck icmpProbeFunc) (string, bool, bool) {
 	if cfg.CacheTTL > 0 {
 		if entry, ok := getCache(domain); ok {
 			if time.Since(entry.Checked) < cfg.CacheTTL {
@@ -128,18 +129,20 @@ func resolveAndSelectWithStatus(domain string, cfg Config, query resolverQueryFu
 		}
 	}
 
-	ips := collectResolverIPs(domain, cfg, query)
+	ips := collectResolverIPsWithContext(ctx, domain, cfg, query)
 	if len(ips) == 0 {
 		logger.Printf("%s: no resolver returned IPv4 addresses", domain)
 		return "", false, false
 	}
 	logger.Printf("%s: collected %d unique IPv4 candidates", domain, len(ips))
 
-	ctx := context.Background()
 	tlsResults := runIPChecks(ctx, ips, cfg.MaxParallelTests, func(ip string) tlsProbeResult {
 		logger.Printf("%s: TLS testing %s", domain, ip)
 		return tlsCheck(ctx, domain, ip, cfg)
 	})
+	if ctx.Err() != nil {
+		return "", false, false
+	}
 
 	var tcpFailed []string
 	for _, ip := range ips {
@@ -155,6 +158,9 @@ func resolveAndSelectWithStatus(domain string, cfg Config, query resolverQueryFu
 		logger.Printf("%s: ICMP testing %s after TCP failure", domain, ip)
 		return pingCheck(ip)
 	})
+	if ctx.Err() != nil {
+		return "", false, false
+	}
 	for _, ip := range tcpFailed {
 		if icmpResults[ip] {
 			recordReachableIP(ip)
@@ -174,13 +180,17 @@ func resolveAndSelectWithStatus(domain string, cfg Config, query resolverQueryFu
 	}
 	if selectedIP == "" {
 		deleteCache(domain)
-	} else {
+	} else if cfg.Mode != "passive" {
 		updateCache(domain, selectedIP)
 	}
 	return selectedIP, selectedIP != "", false
 }
 
 func collectResolverIPs(domain string, cfg Config, query resolverQueryFunc) []string {
+	return collectResolverIPsWithContext(context.Background(), domain, cfg, query)
+}
+
+func collectResolverIPsWithContext(parent context.Context, domain string, cfg Config, query resolverQueryFunc) []string {
 	targets := make([]resolverTarget, 0, len(cfg.DirectDNS)+len(cfg.ProxyDNS))
 	for _, server := range cfg.DirectDNS {
 		targets = append(targets, resolverTarget{server: server})
@@ -209,7 +219,7 @@ func collectResolverIPs(domain string, cfg Config, query resolverQueryFunc) []st
 	if timeout <= 0 {
 		timeout = defaultDNSTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	results := make(chan []string, len(targets))
@@ -223,7 +233,13 @@ func collectResolverIPs(domain string, cfg Config, query resolverQueryFunc) []st
 	seen := make(map[string]bool)
 	var ips []string
 	for range targets {
-		for _, value := range <-results {
+		var values []string
+		select {
+		case values = <-results:
+		case <-ctx.Done():
+			return ips
+		}
+		for _, value := range values {
 			ip, valid := normalizeIPv4Candidate(value)
 			if !valid {
 				continue
@@ -282,13 +298,23 @@ func runIPChecks[T any](ctx context.Context, ips []string, parallel int, check f
 		go func() {
 			defer workers.Done()
 			for ip := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				completed <- result{ip: ip, value: check(ip)}
 			}
 		}()
 	}
 	go func() {
 		for _, ip := range ips {
-			jobs <- ip
+			select {
+			case jobs <- ip:
+			case <-ctx.Done():
+				close(jobs)
+				workers.Wait()
+				close(completed)
+				return
+			}
 		}
 		close(jobs)
 		workers.Wait()
@@ -315,7 +341,14 @@ func queryDNS(ctx context.Context, domain string, server string, cfg Config) []s
 		logger.Printf("%s: invalid DNS interface selection: %v", domain, err)
 		return nil
 	}
-	resp, _, err := client.ExchangeContext(ctx, msg, server)
+	conn, err := client.DialContext(ctx, server)
+	if err != nil {
+		return nil
+	}
+	defer conn.Close()
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
+	resp, _, err := client.ExchangeWithConnContext(ctx, msg, conn)
 	if err != nil {
 		return nil
 	}
@@ -346,6 +379,8 @@ func queryDNSSOCKS5(ctx context.Context, domain, socksAddr, dnsAddr string) []st
 		return nil
 	}
 	defer conn.Close()
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)

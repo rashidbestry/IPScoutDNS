@@ -14,6 +14,9 @@ func dialSOCKS5(ctx context.Context, proxyAddr, targetAddr string) (net.Conn, er
 	if err != nil {
 		return nil, err
 	}
+	// Interrupt a stalled proxy handshake when the passive service shuts down.
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
 
 	fail := func(e error) (net.Conn, error) { _ = conn.Close(); return nil, e }
 	if deadline, ok := ctx.Deadline(); ok {

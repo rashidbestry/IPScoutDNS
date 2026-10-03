@@ -1,6 +1,6 @@
 # IPScoutDNS
 
-IPScoutDNS is a DNS filtering service that checks candidate addresses for reachability before returning answers.
+IPScoutDNS discovers working IPv4 addresses using upstream DNS resolvers and TCP/TLS reachability checks. It runs as an Active DNS server or a Passive scheduled domain resolver.
 
 ## Supported releases
 
@@ -29,6 +29,36 @@ go run . --config ipscoutdns.conf
 
 The sample config listens on port 53. Use a port above 1024 if the operating system requires elevated privileges for low ports.
 
+## Operating modes
+
+Every config must set exactly one `mode`: `active` or `passive`.
+
+Active mode listens for UDP/TCP DNS requests. It resolves allowed A queries using the existing DNS/probing pipeline and cache; disallowed A queries and non-A queries are forwarded to fallback DNS. The allowlist contains regular expressions:
+
+```ini
+mode=active
+active_domains_file=active-domains.txt
+```
+
+For example, `^([a-z]+\.)?example\.com$` matches `example.com` and `api.example.com`; `.*` allows all domains. An empty allowlist matches nothing. A missing file or invalid regex stops startup. The allowlist is loaded at startup.
+
+Passive mode runs without DNS listeners or fallback forwarding. It reads literal hostnames, discovers candidate IPs, probes them, and writes the same reachable/unreachable output files:
+
+```ini
+mode=passive
+passive_domains_file=passive-domains.txt
+resolve_interval=24h
+resolve_parallel=16
+```
+
+Run the provided Passive sample with `go run . --config ipscoutdns-passive.conf`. Edit `passive-domains.txt` to choose the domains. It accepts one ASCII hostname per line (punycode for international names), blank lines and `#`/`;` comments. Names are lowercased, a trailing dot is removed, and duplicates are resolved once per pass. Regexes, wildcards, URLs and IP addresses are rejected.
+
+The first pass starts immediately. After a complete pass, the daemon waits `resolve_interval` (default `24h`), reloads the domain list, and starts another pass. Passes never overlap. A missing/invalid list fails startup; a later list error is logged and that pass is skipped. An empty list is allowed and performs no work until the next reload.
+
+`resolve_parallel` (default `16`) limits concurrent **domain** jobs. `parallel_tests` still limits concurrent IP probes **within each domain**, so 16 domain jobs with 16 probes each may run up to 256 probes concurrently. Reduce either setting for smaller devices. Every Passive pass performs fresh DNS discovery and probing regardless of the Active cache TTL. A failed lookup records the domain as unreachable. ICMP results classify IP reachability; only a TLS-ready candidate is selected as a working domain answer.
+
+This is a breaking config change: `mode` is required and `domains_file` has been removed. Replace it with `active_domains_file` for existing DNS-server deployments. Passive configs require `passive_domains_file`; listener/fallback addresses and the fallback interface are unused in that mode. Both modes require at least one upstream resolver.
+
 ## Configuration lookup
 
 The `--config` argument takes precedence, followed by `IPSCOUTDNS_CONFIG`, then the legacy `IPSELECTOR_CONFIG` environment variable. Without an explicit path, IPScoutDNS checks `ipscoutdns.conf` in the current directory. On Unix it also checks `/etc/ipscoutdns.conf`; on Windows it checks the per-user config directory under `IPScoutDNS/ipscoutdns.conf`.
@@ -45,7 +75,7 @@ Install the release APK on OpenWrt 25.12.5 `rockchip/armv8` devices:
 apk add --allow-untrusted ./ipscoutdns-<version>-rockchip-armv8-aarch64_generic.apk
 ```
 
-The package installs the binary at `/usr/bin/ipscoutdns`, config at `/etc/ipscoutdns.conf`, domain patterns at `/etc/ipscoutdns/domains.txt`, and a procd service at `/etc/init.d/ipscoutdns`. The service is not enabled automatically:
+The package installs the binary at `/usr/bin/ipscoutdns`, config at `/etc/ipscoutdns.conf`, regex patterns at `/etc/ipscoutdns/active-domains.txt`, literal hostnames at `/etc/ipscoutdns/passive-domains.txt`, and a procd service at `/etc/init.d/ipscoutdns`. The service is not enabled automatically:
 
 ```sh
 /etc/init.d/ipscoutdns enable
@@ -53,6 +83,8 @@ The package installs the binary at `/usr/bin/ipscoutdns`, config at `/etc/ipscou
 ```
 
 The package generates its OpenWrt config from the root `ipscoutdns.conf`, applying router-specific listener, route, and file-path overrides during packaging. The generated config listens on `127.0.0.1:5354` to avoid conflicting with dnsmasq. The package does not modify dnsmasq settings; configure DNS forwarding separately if desired.
+
+The packaged config defaults to `mode=active`. To use Passive mode, set `mode=passive` in `/etc/ipscoutdns.conf`, edit `/etc/ipscoutdns/passive-domains.txt`, and restart the service. Keep output paths under `/tmp/ipscoutdns/` in either mode.
 
 All writable runtime output files are configured under `/tmp/ipscoutdns/`. The service creates this directory at startup. OpenWrt clears `/tmp` on reboot. The package uses the router's `/bin/ping` and depends on `ca-bundle` for TLS certificate validation.
 

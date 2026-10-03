@@ -17,20 +17,27 @@ const (
 	defaultConfigPath  = "/etc/ipscoutdns.conf"
 	priorityConfigPath = "ipscoutdns.conf"
 
-	defaultListenAddr    = "127.0.0.1:5354"
-	defaultFallbackDNS   = "127.0.0.1:53053"
-	defaultSOCKS5Addr    = "127.0.0.1:1080"
-	defaultTLSSOCKS5Addr = "127.0.0.1:1080"
-	defaultCacheTTL      = 24 * time.Hour
-	defaultDNSTimeout    = 3 * time.Second
-	defaultTLSTimeout    = 3 * time.Second
-	defaultTLSPort       = 443
-	defaultTLSRoute      = "direct"
-	defaultMaxParallel   = 16
-	defaultAnswerTTL     = uint32(300)
+	defaultListenAddr      = "127.0.0.1:5354"
+	defaultFallbackDNS     = "127.0.0.1:53053"
+	defaultSOCKS5Addr      = "127.0.0.1:1080"
+	defaultTLSSOCKS5Addr   = "127.0.0.1:1080"
+	defaultCacheTTL        = 24 * time.Hour
+	defaultDNSTimeout      = 3 * time.Second
+	defaultTLSTimeout      = 3 * time.Second
+	defaultTLSPort         = 443
+	defaultTLSRoute        = "direct"
+	defaultMaxParallel     = 16
+	defaultAnswerTTL       = uint32(300)
+	defaultResolveInterval = 24 * time.Hour
+	defaultResolveParallel = 16
 )
 
 type Config struct {
+	Mode                   string
+	ActiveDomainsFile      string
+	PassiveDomainsFile     string
+	ResolveInterval        time.Duration
+	ResolveParallel        int
 	DirectDNS              []string
 	ProxyDNS               []string
 	ListenAddr             string
@@ -55,7 +62,6 @@ type Config struct {
 	ReachableIPsFile       string
 	UnreachableDomainsFile string
 	UnreachableIPsFile     string
-	DomainsFile            string
 }
 
 func (c Config) validate() error {
@@ -63,20 +69,38 @@ func (c Config) validate() error {
 }
 
 func (c Config) validateWithInterfaceValidator(validateInterface func(string) error) error {
+	if c.Mode != "active" && c.Mode != "passive" {
+		return fmt.Errorf("mode is required and must be active or passive")
+	}
 	if len(c.DirectDNS) == 0 && len(c.ProxyDNS) == 0 {
 		return fmt.Errorf("at least one upstream resolver is required: direct_dns or proxy_dns")
 	}
-	if strings.TrimSpace(c.ListenAddr) == "" {
-		return fmt.Errorf("server.address cannot be empty")
-	}
-	if _, _, err := net.SplitHostPort(c.ListenAddr); err != nil {
-		return fmt.Errorf("server.address must be host:port: %w", err)
-	}
-	if strings.TrimSpace(c.FallbackDNS) == "" {
-		return fmt.Errorf("fallback.address cannot be empty")
-	}
-	if _, _, err := net.SplitHostPort(c.FallbackDNS); err != nil {
-		return fmt.Errorf("fallback.address must be host:port: %w", err)
+	if c.Mode == "active" {
+		if strings.TrimSpace(c.ActiveDomainsFile) == "" {
+			return fmt.Errorf("active_domains_file is required in active mode")
+		}
+		if strings.TrimSpace(c.ListenAddr) == "" {
+			return fmt.Errorf("server.address cannot be empty")
+		}
+		if _, _, err := net.SplitHostPort(c.ListenAddr); err != nil {
+			return fmt.Errorf("server.address must be host:port: %w", err)
+		}
+		if strings.TrimSpace(c.FallbackDNS) == "" {
+			return fmt.Errorf("fallback.address cannot be empty")
+		}
+		if _, _, err := net.SplitHostPort(c.FallbackDNS); err != nil {
+			return fmt.Errorf("fallback.address must be host:port: %w", err)
+		}
+	} else {
+		if strings.TrimSpace(c.PassiveDomainsFile) == "" {
+			return fmt.Errorf("passive_domains_file is required in passive mode")
+		}
+		if c.ResolveInterval <= 0 {
+			return fmt.Errorf("resolve_interval must be greater than zero")
+		}
+		if c.ResolveParallel <= 0 {
+			return fmt.Errorf("resolve_parallel must be greater than zero")
+		}
 	}
 	if strings.TrimSpace(c.DNSSOCKS5Addr) != "" {
 		if _, _, err := net.SplitHostPort(c.DNSSOCKS5Addr); err != nil {
@@ -91,8 +115,10 @@ func (c Config) validateWithInterfaceValidator(validateInterface func(string) er
 	if err := validateInterface(c.DirectDNSInterface); err != nil {
 		return fmt.Errorf("direct_dns_interface: %w", err)
 	}
-	if err := validateInterface(c.FallbackDNSInterface); err != nil {
-		return fmt.Errorf("fallback_dns_interface: %w", err)
+	if c.Mode == "active" {
+		if err := validateInterface(c.FallbackDNSInterface); err != nil {
+			return fmt.Errorf("fallback_dns_interface: %w", err)
+		}
 	}
 	if err := validateInterfaceSelector(c.DirectTCPInterface); err != nil {
 		return fmt.Errorf("server.direct_tcp_interface: %w", err)
@@ -201,6 +227,8 @@ func loadConfig(path string) (Config, error) {
 
 func loadConfigWithInterfaceValidator(path string, validateInterface func(string) error) (Config, error) {
 	cfg := Config{
+		ResolveInterval:  defaultResolveInterval,
+		ResolveParallel:  defaultResolveParallel,
 		ListenAddr:       defaultListenAddr,
 		FallbackDNS:      defaultFallbackDNS,
 		SOCKS5Addr:       defaultSOCKS5Addr,
@@ -278,6 +306,30 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 			key = strings.ToLower(strings.TrimSpace(key))
 			value = strings.TrimSpace(value)
 			switch key {
+			case "mode":
+				if cfg.Mode != "" {
+					return cfg, fmt.Errorf("%s:%d: mode must be specified only once", path, lineNo)
+				}
+				if value != "active" && value != "passive" {
+					return cfg, fmt.Errorf("%s:%d: mode must be active or passive", path, lineNo)
+				}
+				cfg.Mode = value
+			case "active_domains_file":
+				cfg.ActiveDomainsFile = value
+			case "passive_domains_file":
+				cfg.PassiveDomainsFile = value
+			case "resolve_interval":
+				d, err := time.ParseDuration(value)
+				if err != nil || d <= 0 {
+					return cfg, fmt.Errorf("%s:%d: invalid resolve_interval %q", path, lineNo, value)
+				}
+				cfg.ResolveInterval = d
+			case "resolve_parallel":
+				v, err := strconv.Atoi(value)
+				if err != nil || v <= 0 {
+					return cfg, fmt.Errorf("%s:%d: invalid resolve_parallel %q", path, lineNo, value)
+				}
+				cfg.ResolveParallel = v
 			case "server", "address", "listen":
 				cfg.ListenAddr = value
 			case "logs_enabled":
@@ -398,7 +450,7 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 				}
 				cfg.AnswerTTL = uint32(v)
 			case "domains_file":
-				cfg.DomainsFile = value
+				return cfg, fmt.Errorf("%s:%d: domains_file was removed; use active_domains_file or passive_domains_file", path, lineNo)
 			case "reachable_hosts":
 				cfg.ReachableHostsFile = value
 			case "reachable_domains_file", "reachable_domains":

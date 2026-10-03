@@ -1,0 +1,2 @@
+# Literal domains only; one hostname per line. Regexes are not accepted.
+example.com

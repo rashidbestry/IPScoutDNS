@@ -34,7 +34,8 @@ endef
 
 define Package/ipscoutdns/conffiles
 /etc/ipscoutdns.conf
-/etc/ipscoutdns/domains.txt
+/etc/ipscoutdns/active-domains.txt
+/etc/ipscoutdns/passive-domains.txt
 endef
 
 define Package/ipscoutdns/install
@@ -42,7 +43,8 @@ define Package/ipscoutdns/install
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ipscoutdns $(1)/usr/bin/ipscoutdns
 	$(INSTALL_DIR) $(1)/etc/ipscoutdns
 	$(INSTALL_CONF) $(PKG_BUILD_DIR)/ipscoutdns.conf $(1)/etc/ipscoutdns.conf
-	$(INSTALL_CONF) ./files/domains.txt $(1)/etc/ipscoutdns/domains.txt
+	$(INSTALL_CONF) ./files/active-domains.txt $(1)/etc/ipscoutdns/active-domains.txt
+	$(INSTALL_CONF) ./files/passive-domains.txt $(1)/etc/ipscoutdns/passive-domains.txt
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/ipscoutdns.init $(1)/etc/init.d/ipscoutdns
 endef

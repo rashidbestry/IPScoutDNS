@@ -21,11 +21,15 @@ var (
 )
 
 func pingIP(ip string) bool {
+	return pingIPContext(context.Background(), ip)
+}
+
+func pingIPContext(parent context.Context, ip string) bool {
 	if ip == "" {
 		return false
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
 	_, err := exec.CommandContext(ctx, "ping", pingArgs(ip)...).CombinedOutput()
 	return err == nil

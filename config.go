@@ -54,6 +54,7 @@ type Config struct {
 	TLSTimeout             time.Duration
 	TLSPort                int
 	TLSRoute               string
+	HTTPProbe              bool
 	MaxParallelTests       int
 	LogsEnabled            bool
 	AnswerTTL              uint32
@@ -239,6 +240,7 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 		TLSTimeout:             defaultTLSTimeout,
 		TLSPort:                defaultTLSPort,
 		TLSRoute:               defaultTLSRoute,
+		HTTPProbe:              true,
 		MaxParallelTests:       defaultMaxParallel,
 		LogsEnabled:            true,
 		AnswerTTL:              defaultAnswerTTL,
@@ -410,6 +412,12 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 					return cfg, fmt.Errorf("%s:%d: invalid tcp timeout %q", path, lineNo, value)
 				}
 				cfg.TLSTimeout = d
+			case "http_probe":
+				enabled, err := strconv.ParseBool(value)
+				if err != nil {
+					return cfg, fmt.Errorf("%s:%d: invalid http_probe value %q", path, lineNo, value)
+				}
+				cfg.HTTPProbe = enabled
 			case "tcp_port", "tls_port":
 				v, err := strconv.Atoi(value)
 				if err != nil || v <= 0 || v > 65535 {

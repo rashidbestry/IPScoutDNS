@@ -10,6 +10,40 @@ import (
 	"testing"
 )
 
+func TestDomainStatusChangesImmediately(t *testing.T) {
+	previousConfig := currentConfig
+	t.Cleanup(func() { currentConfig = previousConfig })
+	dir := t.TempDir()
+	currentConfig = Config{
+		ReachableDomainsFile:   filepath.Join(dir, "reachable.domains"),
+		UnreachableDomainsFile: filepath.Join(dir, "unreachable.domains"),
+	}
+	const domain = "example.com"
+	for _, reachable := range []bool{false, true, false, true} {
+		if reachable {
+			recordReachableDomain(domain)
+		} else {
+			recordDomainUnreachable(domain)
+		}
+		for path, present := range map[string]bool{
+			currentConfig.ReachableDomainsFile:   reachable,
+			currentConfig.UnreachableDomainsFile: !reachable,
+		} {
+			contents, err := os.ReadFile(path)
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			want := ""
+			if present {
+				want = domain + "\n"
+			}
+			if string(contents) != want {
+				t.Fatalf("%s = %q, want %q", path, contents, want)
+			}
+		}
+	}
+}
+
 func TestPingRetriesAndStopsAfterSuccess(t *testing.T) {
 	calls := 0
 	got := pingIPWithRunner(context.Background(), "192.0.2.1", func(context.Context, string) ([]byte, error) {

@@ -95,6 +95,41 @@ func TestSampleConfigUsesTCPReachabilitySettings(t *testing.T) {
 	}
 }
 
+func TestHTTPProbeConfig(t *testing.T) {
+	for _, mode := range []string{"active", "passive"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, test := range []struct {
+				name, setting string
+				want          bool
+				invalid       bool
+			}{
+				{"omitted defaults to enabled", "", true, false},
+				{"enabled", "http_probe=true\n", true, false},
+				{"disabled with spaces", "http_probe = false\n", false, false},
+				{"invalid boolean", "http_probe=maybe\n", false, true},
+				{"empty value", "http_probe=\n", false, true},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					contents := "mode=" + mode + "\nactive_domains_file=active-domains.txt\npassive_domains_file=passive-domains.txt\ndirect_dns=1.1.1.1\n" + test.setting
+					cfg, err := loadConfig(writeModeTestFile(t, contents))
+					if test.invalid {
+						if err == nil || !strings.Contains(err.Error(), "invalid http_probe") {
+							t.Fatalf("error = %v, want invalid http_probe", err)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					if cfg.HTTPProbe != test.want {
+						t.Fatalf("HTTPProbe = %v, want %v", cfg.HTTPProbe, test.want)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestDirectTCPInterfaceConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ipscoutdns.conf")
 	contents := `mode=active

@@ -93,6 +93,7 @@ func main() {
 	logger.Printf("TLS timeout: %s", cfg.TLSTimeout)
 	logger.Printf("TLS port: %d", cfg.TLSPort)
 	logger.Printf("TLS route: %s", cfg.TLSRoute)
+	logger.Printf("HTTP fallback probe enabled: %t", cfg.HTTPProbe)
 	if cfg.TLSRoute == "direct" {
 		logger.Printf("direct TCP interface: %s", configuredOrDefault(cfg.DirectTCPInterface))
 	}

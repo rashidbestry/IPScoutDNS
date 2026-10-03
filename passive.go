@@ -73,9 +73,13 @@ func resolvePassiveDomain(ctx context.Context, domain string, cfg Config) {
 }
 
 func resolvePassiveDomainWith(ctx context.Context, domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, pingCheck icmpProbeFunc) {
+	resolvePassiveDomainWithProbes(ctx, domain, cfg, query, tlsCheck, testHTTP, pingCheck)
+}
+
+func resolvePassiveDomainWithProbes(ctx context.Context, domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, httpCheck httpProbeFunc, pingCheck icmpProbeFunc) {
 	// Each scheduled pass performs fresh discovery and probing, regardless of TTL.
 	cfg.CacheTTL = 0
-	ip, ok, _ := resolveAndSelectWithContext(ctx, domain, cfg, query, tlsCheck, pingCheck)
+	ip, ok, _ := resolveAndSelectWithProbes(ctx, domain, cfg, query, tlsCheck, httpCheck, pingCheck)
 	if ctx.Err() != nil {
 		return
 	}

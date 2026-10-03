@@ -87,6 +87,7 @@ func resolveAndSelectStatus(domain string, cfg Config) (string, bool, bool) {
 
 type resolverQueryFunc func(context.Context, string, string, bool, Config) []string
 type tlsProbeFunc func(context.Context, string, string, Config) tlsProbeResult
+type httpProbeFunc func(context.Context, string, string, Config) httpProbeResult
 type icmpProbeFunc func(string) bool
 
 type resolverTarget struct {
@@ -116,6 +117,10 @@ func resolveAndSelectWithStatus(domain string, cfg Config, query resolverQueryFu
 }
 
 func resolveAndSelectWithContext(ctx context.Context, domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, pingCheck icmpProbeFunc) (string, bool, bool) {
+	return resolveAndSelectWithProbes(ctx, domain, cfg, query, tlsCheck, testHTTP, pingCheck)
+}
+
+func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, httpCheck httpProbeFunc, pingCheck icmpProbeFunc) (string, bool, bool) {
 	if cfg.CacheTTL > 0 {
 		if entry, ok := getCache(domain); ok {
 			if time.Since(entry.Checked) < cfg.CacheTTL {
@@ -165,11 +170,33 @@ func resolveAndSelectWithContext(ctx context.Context, domain string, cfg Config,
 	}
 
 	domainReachable := false
+	for _, result := range tlsResults {
+		if result.tcpReachable && result.tlsReady {
+			domainReachable = true
+			break
+		}
+	}
+	var httpResults map[string]httpProbeResult
+	if !domainReachable && cfg.HTTPProbe {
+		logger.Printf("%s: no TLS-ready IP; checking HTTP on port 80", domain)
+		httpResults = runIPChecks(ctx, ips, cfg.MaxParallelTests, func(ip string) httpProbeResult {
+			return httpCheck(ctx, domain, ip, cfg)
+		})
+		if ctx.Err() != nil {
+			return "", false, false
+		}
+		for ip, result := range httpResults {
+			if result.tcpReachable && result.httpReady {
+				logger.Printf("%s: HTTP reachable at %s:80; TLS DNS selection still requires a TLS-ready IP", domain, ip)
+				domainReachable = true
+				break
+			}
+		}
+	}
 	var tcpFailed []string
 	for _, ip := range ips {
 		result := tlsResults[ip]
-		if result.tcpReachable {
-			domainReachable = true
+		if result.tcpReachable || httpResults[ip].tcpReachable {
 			recordReachableIP(ip)
 		} else {
 			tcpFailed = append(tcpFailed, ip)
@@ -190,8 +217,8 @@ func resolveAndSelectWithContext(ctx context.Context, domain string, cfg Config,
 			recordUnreachableIP(ip)
 		}
 	}
-	// Domain reachability describes the TCP probe, independently of whether
-	// TLS completed well enough to select an IP for a DNS answer.
+	// TLS or a valid HTTP response validates a domain. TCP/ICMP alone only
+	// establishes IP reachability, not a working service for the hostname.
 	if domainReachable {
 		recordReachableDomain(domain)
 	} else {

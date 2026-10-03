@@ -69,6 +69,7 @@ func TestDomainOutputReachability(t *testing.T) {
 			dir := t.TempDir()
 			cfg := Config{
 				DirectDNS:              []string{"resolver"},
+				HTTPProbe:              true,
 				ReachableHostsFile:     filepath.Join(dir, "reachable.hosts"),
 				ReachableDomainsFile:   filepath.Join(dir, "reachable.domains"),
 				UnreachableDomainsFile: filepath.Join(dir, "unreachable.domains"),
@@ -83,28 +84,40 @@ func TestDomainOutputReachability(t *testing.T) {
 			const domain = "example.com"
 			hostRecorded := false
 			for _, step := range []struct {
-				name      string
-				probe     tlsProbeResult
-				ping      bool
-				selected  bool
-				reachable bool
+				name        string
+				probe       tlsProbeResult
+				http        httpProbeResult
+				ping        bool
+				selected    bool
+				reachable   bool
+				unreachable bool
 			}{
-				{"all probes fail", tlsProbeResult{}, false, false, false},
-				{"TCP succeeds but TLS fails", tlsProbeResult{tcpReachable: true}, false, false, true},
-				{"only ICMP succeeds", tlsProbeResult{}, true, false, false},
-				{"TLS succeeds", tlsProbeResult{tcpReachable: true, tlsReady: true}, false, true, true},
-				{"becomes unreachable again", tlsProbeResult{}, false, false, false},
+				{"service failure is immediately unreachable", tlsProbeResult{}, httpProbeResult{}, false, false, false, true},
+				{"TCP alone is insufficient", tlsProbeResult{tcpReachable: true}, httpProbeResult{}, false, false, false, true},
+				{"only ICMP success does not validate domain", tlsProbeResult{}, httpProbeResult{}, true, false, false, true},
+				{"HTTP succeeds without TLS", tlsProbeResult{}, httpProbeResult{tcpReachable: true, httpReady: true}, false, false, true, false},
+				{"TLS succeeds", tlsProbeResult{tcpReachable: true, tlsReady: true}, httpProbeResult{}, false, true, true, false},
+				{"failure immediately replaces reachable status", tlsProbeResult{}, httpProbeResult{}, false, false, false, true},
 			} {
 				t.Run(step.name, func(t *testing.T) {
 					probe := func(context.Context, string, string, Config) tlsProbeResult { return step.probe }
+					httpCalls := 0
+					httpProbe := func(context.Context, string, string, Config) httpProbeResult { httpCalls++; return step.http }
 					ping := func(string) bool { return step.ping }
 					if passive {
-						resolvePassiveDomainWith(context.Background(), domain, cfg, query, probe, ping)
+						resolvePassiveDomainWithProbes(context.Background(), domain, cfg, query, probe, httpProbe, ping)
 					} else {
-						_, ok := resolveAndSelectWith(domain, cfg, query, probe, ping)
+						_, ok, _ := resolveAndSelectWithProbes(context.Background(), domain, cfg, query, probe, httpProbe, ping)
 						if ok != step.selected {
 							t.Fatalf("selected = %v, want %v", ok, step.selected)
 						}
+					}
+					wantHTTPCalls := 1
+					if step.selected {
+						wantHTTPCalls = 0
+					}
+					if httpCalls != wantHTTPCalls {
+						t.Fatalf("HTTP checks = %d, want %d", httpCalls, wantHTTPCalls)
 					}
 					hostRecorded = hostRecorded || step.selected
 					hosts, err := os.ReadFile(cfg.ReachableHostsFile)
@@ -120,7 +133,7 @@ func TestDomainOutputReachability(t *testing.T) {
 					}
 					for path, wantDomain := range map[string]bool{
 						cfg.ReachableDomainsFile:   step.reachable,
-						cfg.UnreachableDomainsFile: !step.reachable,
+						cfg.UnreachableDomainsFile: step.unreachable,
 					} {
 						contents, err := os.ReadFile(path)
 						if err != nil && !os.IsNotExist(err) {
@@ -219,5 +232,105 @@ func TestNoCandidatesPreservesDomainStatus(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestInconclusiveChecksDoNotChangeDomainStatus(t *testing.T) {
+	previousConfig := currentConfig
+	t.Cleanup(func() { currentConfig = previousConfig })
+	dir := t.TempDir()
+	cfg := Config{
+		DirectDNS:              []string{"test"},
+		HTTPProbe:              true,
+		ReachableDomainsFile:   filepath.Join(dir, "reachable.domains"),
+		UnreachableDomainsFile: filepath.Join(dir, "unreachable.domains"),
+	}
+	currentConfig = cfg
+	const domain = "example.com"
+	recordReachableDomain(domain)
+	query := func(context.Context, string, string, bool, Config) []string { return nil }
+	tlsProbe := func(context.Context, string, string, Config) tlsProbeResult {
+		return tlsProbeResult{tcpReachable: true}
+	}
+	httpProbe := func(context.Context, string, string, Config) httpProbeResult { return httpProbeResult{} }
+	ping := func(string) bool { t.Error("unexpected ICMP check"); return false }
+	resolveAndSelectWithProbes(context.Background(), domain, cfg, query, tlsProbe, httpProbe, ping)
+	if _, err := os.Stat(cfg.UnreachableDomainsFile); !os.IsNotExist(err) {
+		t.Fatalf("DNS failure changed status: %v", err)
+	}
+	query = func(context.Context, string, string, bool, Config) []string { return []string{"192.0.2.1"} }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resolveAndSelectWithProbes(ctx, domain, cfg, query, tlsProbe, func(context.Context, string, string, Config) httpProbeResult {
+		cancel()
+		return httpProbeResult{}
+	}, ping)
+	if _, err := os.Stat(cfg.UnreachableDomainsFile); !os.IsNotExist(err) {
+		t.Fatalf("canceled check changed status: %v", err)
+	}
+	resolveAndSelectWithProbes(context.Background(), domain, cfg, query, tlsProbe, httpProbe, ping)
+	contents, err := os.ReadFile(cfg.UnreachableDomainsFile)
+	if err != nil || string(contents) != domain+"\n" {
+		t.Fatalf("completed failure = %q, error=%v", contents, err)
+	}
+}
+
+func TestHTTPProbeToggle(t *testing.T) {
+	previousConfig := currentConfig
+	t.Cleanup(func() { currentConfig = previousConfig })
+	for _, mode := range []string{"active", "passive"} {
+		for _, enabled := range []bool{true, false} {
+			t.Run(mode+"/http="+strconv.FormatBool(enabled), func(t *testing.T) {
+				dir := t.TempDir()
+				cfg := Config{
+					Mode: mode, DirectDNS: []string{"test"}, HTTPProbe: enabled,
+					ReachableDomainsFile:   filepath.Join(dir, "reachable.domains"),
+					UnreachableDomainsFile: filepath.Join(dir, "unreachable.domains"),
+					ReachableHostsFile:     filepath.Join(dir, "reachable.hosts"),
+				}
+				currentConfig = cfg
+				query := func(context.Context, string, string, bool, Config) []string { return []string{"192.0.2.1"} }
+				tlsCheck := func(context.Context, string, string, Config) tlsProbeResult {
+					return tlsProbeResult{tcpReachable: true}
+				}
+				httpCalls := 0
+				httpCheck := func(context.Context, string, string, Config) httpProbeResult {
+					httpCalls++
+					return httpProbeResult{tcpReachable: true, httpReady: true}
+				}
+				pingCheck := func(string) bool { t.Error("unexpected ICMP check after TCP success"); return false }
+				if mode == "passive" {
+					resolvePassiveDomainWithProbes(context.Background(), "example.com", cfg, query, tlsCheck, httpCheck, pingCheck)
+				} else {
+					_, ok, _ := resolveAndSelectWithProbes(context.Background(), "example.com", cfg, query, tlsCheck, httpCheck, pingCheck)
+					if ok {
+						t.Error("HTTP-only candidate selected for TLS DNS answer")
+					}
+				}
+				wantCalls := 0
+				if enabled {
+					wantCalls = 1
+				}
+				if httpCalls != wantCalls {
+					t.Fatalf("HTTP calls = %d, want %d", httpCalls, wantCalls)
+				}
+				for path, present := range map[string]bool{cfg.ReachableDomainsFile: enabled, cfg.UnreachableDomainsFile: !enabled} {
+					contents, err := os.ReadFile(path)
+					if err != nil && !os.IsNotExist(err) {
+						t.Fatal(err)
+					}
+					want := ""
+					if present {
+						want = "example.com\n"
+					}
+					if string(contents) != want {
+						t.Fatalf("%s = %q, want %q", path, contents, want)
+					}
+				}
+				if _, err := os.Stat(cfg.ReachableHostsFile); !os.IsNotExist(err) {
+					t.Fatalf("HTTP-only result created hosts output: %v", err)
+				}
+			})
+		}
 	}
 }

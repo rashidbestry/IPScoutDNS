@@ -114,6 +114,48 @@ direct_tcp_interface=127.0.0.1
 	}
 }
 
+func TestDNSInterfaceConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		directKey   string
+		fallbackKey string
+	}{
+		{
+			name:        "canonical keys",
+			directKey:   "direct_dns_interface",
+			fallbackKey: "fallback_dns_interface",
+		},
+		{
+			name:        "legacy aliases",
+			directKey:   "dns_interface",
+			fallbackKey: "fallback_interface",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "ipscoutdns.conf")
+			contents := "direct_dns=1.1.1.1\n" +
+				test.directKey + "=eth1\n" +
+				test.fallbackKey + "=eth0\n"
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			cfg, err := loadConfigWithInterfaceValidator(path, func(string) error { return nil })
+			if err != nil {
+				t.Fatalf("loadConfigWithInterfaceValidator() error = %v", err)
+			}
+			if cfg.DirectDNSInterface != "eth1" {
+				t.Errorf("DirectDNSInterface = %q, want eth1", cfg.DirectDNSInterface)
+			}
+			if cfg.FallbackDNSInterface != "eth0" {
+				t.Errorf("FallbackDNSInterface = %q, want eth0", cfg.FallbackDNSInterface)
+			}
+		})
+	}
+}
+
 func TestFlatFormatConfigLoads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ipscoutdns.conf")
 	contents := `server=127.0.0.1:53

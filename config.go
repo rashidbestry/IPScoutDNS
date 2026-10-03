@@ -37,7 +37,8 @@ type Config struct {
 	FallbackDNS            string
 	SOCKS5Addr             string // legacy alias for DNSSOCKS5Addr
 	DNSSOCKS5Addr          string // SOCKS5 proxy used for DNS resolvers
-	DNSInterface           string // local interface name or source IP for direct DNS
+	DirectDNSInterface     string // local interface name or source IP for direct DNS
+	FallbackDNSInterface   string // local interface name or source IP for fallback DNS
 	DirectTCPInterface     string // local interface name or source IP for direct reachability checks
 	TLSSOCKS5Addr          string // SOCKS5 proxy used for reachability checks
 	TLSProxyPort           int
@@ -58,6 +59,10 @@ type Config struct {
 }
 
 func (c Config) validate() error {
+	return c.validateWithInterfaceValidator(validateInterfaceSelector)
+}
+
+func (c Config) validateWithInterfaceValidator(validateInterface func(string) error) error {
 	if len(c.DirectDNS) == 0 && len(c.ProxyDNS) == 0 {
 		return fmt.Errorf("at least one upstream resolver is required: direct_dns or proxy_dns")
 	}
@@ -83,8 +88,11 @@ func (c Config) validate() error {
 			return fmt.Errorf("tcp socks5 address must be host:port: %w", err)
 		}
 	}
-	if err := validateInterfaceSelector(c.DNSInterface); err != nil {
-		return fmt.Errorf("server.dns_interface: %w", err)
+	if err := validateInterface(c.DirectDNSInterface); err != nil {
+		return fmt.Errorf("direct_dns_interface: %w", err)
+	}
+	if err := validateInterface(c.FallbackDNSInterface); err != nil {
+		return fmt.Errorf("fallback_dns_interface: %w", err)
 	}
 	if err := validateInterfaceSelector(c.DirectTCPInterface); err != nil {
 		return fmt.Errorf("server.direct_tcp_interface: %w", err)
@@ -188,6 +196,10 @@ func parseFlatList(raw string) []string {
 }
 
 func loadConfig(path string) (Config, error) {
+	return loadConfigWithInterfaceValidator(path, validateInterfaceSelector)
+}
+
+func loadConfigWithInterfaceValidator(path string, validateInterface func(string) error) (Config, error) {
 	cfg := Config{
 		ListenAddr:       defaultListenAddr,
 		FallbackDNS:      defaultFallbackDNS,
@@ -327,11 +339,11 @@ func loadConfig(path string) (Config, error) {
 				}
 				addListValue(key, value)
 			case "direct_dns_interface", "dns_interface":
-				cfg.DNSInterface = value
+				cfg.DirectDNSInterface = value
 			case "direct_tcp_interface":
 				cfg.DirectTCPInterface = value
 			case "fallback_dns_interface", "fallback_interface":
-				cfg.DNSInterface = value
+				cfg.FallbackDNSInterface = value
 			case "fallback_dns":
 				cfg.FallbackDNS = value
 			case "dns_timeout":
@@ -468,7 +480,7 @@ func loadConfig(path string) (Config, error) {
 
 	cfg.DirectDNS = cleanList(cfg.DirectDNS)
 	cfg.ProxyDNS = cleanList(cfg.ProxyDNS)
-	if err := cfg.validate(); err != nil {
+	if err := cfg.validateWithInterfaceValidator(validateInterface); err != nil {
 		return cfg, err
 	}
 	return cfg, nil

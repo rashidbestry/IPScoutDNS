@@ -310,7 +310,7 @@ func queryDNS(ctx context.Context, domain string, server string, cfg Config) []s
 		timeout = defaultDNSTimeout
 	}
 
-	client, err := newDNSClient(timeout, cfg.DNSInterface, server)
+	client, err := newDNSClient(timeout, cfg.DirectDNSInterface, server)
 	if err != nil {
 		logger.Printf("%s: invalid DNS interface selection: %v", domain, err)
 		return nil
@@ -511,7 +511,7 @@ func forwardDNS(w dns.ResponseWriter, req *dns.Msg, server string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	client, err := newDNSClient(timeout, currentConfig.DNSInterface, server)
+	client, err := newDNSClient(timeout, currentConfig.FallbackDNSInterface, server)
 	if err != nil {
 		logger.Printf("invalid DNS interface selection: %v", err)
 		dns.HandleFailed(w, req)

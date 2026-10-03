@@ -82,7 +82,7 @@ The package installs the binary at `/usr/bin/ipscoutdns`, config at `/etc/ipscou
 /etc/init.d/ipscoutdns start
 ```
 
-The package generates its OpenWrt config from the root `ipscoutdns.conf`, applying router-specific listener, route, and file-path overrides during packaging. The generated config listens on `127.0.0.1:5354` to avoid conflicting with dnsmasq. The package does not modify dnsmasq settings; configure DNS forwarding separately if desired.
+The package generates its OpenWrt config and domain lists during packaging from the repository-root `ipscoutdns.conf`, `active-domains.txt`, and `passive-domains.txt`. The config applies router-specific listener, route, and file-path overrides and listens on `127.0.0.1:5354` to avoid conflicting with dnsmasq. The package does not modify dnsmasq settings; configure DNS forwarding separately if desired.
 
 The packaged config defaults to `mode=active`. To use Passive mode, set `mode=passive` in `/etc/ipscoutdns.conf`, edit `/etc/ipscoutdns/passive-domains.txt`, and restart the service. Keep output paths under `/tmp/ipscoutdns/` in either mode.
 

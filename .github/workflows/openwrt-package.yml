@@ -17,6 +17,8 @@ on:
     paths:
       - "*.go"
       - ipscoutdns.conf
+      - active-domains.txt
+      - passive-domains.txt
       - go.mod
       - go.sum
       - packaging/openwrt/**
@@ -58,10 +60,15 @@ jobs:
           mkdir -p "$package_dir"
           cp -R packaging/openwrt/. "$package_dir/"
           cp ipscoutdns.conf "$package_dir/files/ipscoutdns.conf"
+          cp active-domains.txt passive-domains.txt "$package_dir/files/"
           cp "$RUNNER_TEMP/ipscoutdns" "$package_dir/files/ipscoutdns"
 
           generated_config="$RUNNER_TEMP/ipscoutdns-openwrt.conf"
-          python3 "$package_dir/generate-config.py" "$package_dir/files/ipscoutdns.conf" "$generated_config"
+          python3 "$package_dir/generate-config.py" "$package_dir/files/ipscoutdns.conf" "$generated_config" \
+            --active-domains-source "$package_dir/files/active-domains.txt" \
+            --active-domains-destination "$RUNNER_TEMP/ipscoutdns-active-domains.txt" \
+            --passive-domains-source "$package_dir/files/passive-domains.txt" \
+            --passive-domains-destination "$RUNNER_TEMP/ipscoutdns-passive-domains.txt"
           IPSCOUTDNS_OPENWRT_CONFIG="$generated_config" go test ./...
 
           version="$PACKAGE_VERSION"

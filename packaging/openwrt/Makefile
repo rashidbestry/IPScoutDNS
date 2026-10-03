@@ -23,7 +23,11 @@ endef
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
 	$(CP) ./files/ipscoutdns $(PKG_BUILD_DIR)/ipscoutdns
-	python3 ./generate-config.py ./files/ipscoutdns.conf $(PKG_BUILD_DIR)/ipscoutdns.conf
+	python3 ./generate-config.py ./files/ipscoutdns.conf $(PKG_BUILD_DIR)/ipscoutdns.conf \
+		--active-domains-source ./files/active-domains.txt \
+		--active-domains-destination $(PKG_BUILD_DIR)/active-domains.txt \
+		--passive-domains-source ./files/passive-domains.txt \
+		--passive-domains-destination $(PKG_BUILD_DIR)/passive-domains.txt
 endef
 
 define Build/Configure
@@ -43,8 +47,8 @@ define Package/ipscoutdns/install
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ipscoutdns $(1)/usr/bin/ipscoutdns
 	$(INSTALL_DIR) $(1)/etc/ipscoutdns
 	$(INSTALL_CONF) $(PKG_BUILD_DIR)/ipscoutdns.conf $(1)/etc/ipscoutdns.conf
-	$(INSTALL_CONF) ./files/active-domains.txt $(1)/etc/ipscoutdns/active-domains.txt
-	$(INSTALL_CONF) ./files/passive-domains.txt $(1)/etc/ipscoutdns/passive-domains.txt
+	$(INSTALL_CONF) $(PKG_BUILD_DIR)/active-domains.txt $(1)/etc/ipscoutdns/active-domains.txt
+	$(INSTALL_CONF) $(PKG_BUILD_DIR)/passive-domains.txt $(1)/etc/ipscoutdns/passive-domains.txt
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/ipscoutdns.init $(1)/etc/init.d/ipscoutdns
 endef

@@ -17,27 +17,27 @@ const (
 	defaultConfigPath  = "/etc/ipscoutdns.conf"
 	priorityConfigPath = "ipscoutdns.conf"
 
-	defaultListenAddr      = "127.0.0.1:5354"
-	defaultFallbackDNS     = "127.0.0.1:53053"
-	defaultSOCKS5Addr      = "127.0.0.1:1080"
-	defaultTLSSOCKS5Addr   = "127.0.0.1:1080"
-	defaultCacheTTL        = 24 * time.Hour
-	defaultDNSTimeout      = 3 * time.Second
-	defaultTLSTimeout      = 3 * time.Second
-	defaultTLSPort         = 443
-	defaultTLSRoute        = "direct"
-	defaultMaxParallel     = 16
-	defaultAnswerTTL       = uint32(300)
-	defaultResolveInterval = 24 * time.Hour
-	defaultResolveParallel = 16
+	defaultListenAddr             = "127.0.0.1:5354"
+	defaultFallbackDNS            = "127.0.0.1:53053"
+	defaultSOCKS5Addr             = "127.0.0.1:1080"
+	defaultTLSSOCKS5Addr          = "127.0.0.1:1080"
+	defaultCacheTTL               = 24 * time.Hour
+	defaultDNSTimeout             = 3 * time.Second
+	defaultTLSTimeout             = 3 * time.Second
+	defaultTLSPort                = 443
+	defaultTLSRoute               = "direct"
+	defaultMaxParallel            = 16
+	defaultAnswerTTL              = uint32(300)
+	defaultPassiveResolveInterval = 24 * time.Hour
+	defaultPassiveResolveParallel = 16
 )
 
 type Config struct {
 	Mode                   string
 	ActiveDomainsFile      string
 	PassiveDomainsFile     string
-	ResolveInterval        time.Duration
-	ResolveParallel        int
+	PassiveResolveInterval time.Duration
+	PassiveResolveParallel int
 	DirectDNS              []string
 	ProxyDNS               []string
 	ListenAddr             string
@@ -95,11 +95,11 @@ func (c Config) validateWithInterfaceValidator(validateInterface func(string) er
 		if strings.TrimSpace(c.PassiveDomainsFile) == "" {
 			return fmt.Errorf("passive_domains_file is required in passive mode")
 		}
-		if c.ResolveInterval <= 0 {
-			return fmt.Errorf("resolve_interval must be greater than zero")
+		if c.PassiveResolveInterval <= 0 {
+			return fmt.Errorf("passive_resolve_interval must be greater than zero")
 		}
-		if c.ResolveParallel <= 0 {
-			return fmt.Errorf("resolve_parallel must be greater than zero")
+		if c.PassiveResolveParallel <= 0 {
+			return fmt.Errorf("passive_resolve_parallel must be greater than zero")
 		}
 	}
 	if strings.TrimSpace(c.DNSSOCKS5Addr) != "" {
@@ -227,21 +227,21 @@ func loadConfig(path string) (Config, error) {
 
 func loadConfigWithInterfaceValidator(path string, validateInterface func(string) error) (Config, error) {
 	cfg := Config{
-		ResolveInterval:  defaultResolveInterval,
-		ResolveParallel:  defaultResolveParallel,
-		ListenAddr:       defaultListenAddr,
-		FallbackDNS:      defaultFallbackDNS,
-		SOCKS5Addr:       defaultSOCKS5Addr,
-		DNSSOCKS5Addr:    defaultSOCKS5Addr,
-		TLSSOCKS5Addr:    defaultTLSSOCKS5Addr,
-		CacheTTL:         defaultCacheTTL,
-		DNSTimeout:       defaultDNSTimeout,
-		TLSTimeout:       defaultTLSTimeout,
-		TLSPort:          defaultTLSPort,
-		TLSRoute:         defaultTLSRoute,
-		MaxParallelTests: defaultMaxParallel,
-		LogsEnabled:      true,
-		AnswerTTL:        defaultAnswerTTL,
+		PassiveResolveInterval: defaultPassiveResolveInterval,
+		PassiveResolveParallel: defaultPassiveResolveParallel,
+		ListenAddr:             defaultListenAddr,
+		FallbackDNS:            defaultFallbackDNS,
+		SOCKS5Addr:             defaultSOCKS5Addr,
+		DNSSOCKS5Addr:          defaultSOCKS5Addr,
+		TLSSOCKS5Addr:          defaultTLSSOCKS5Addr,
+		CacheTTL:               defaultCacheTTL,
+		DNSTimeout:             defaultDNSTimeout,
+		TLSTimeout:             defaultTLSTimeout,
+		TLSPort:                defaultTLSPort,
+		TLSRoute:               defaultTLSRoute,
+		MaxParallelTests:       defaultMaxParallel,
+		LogsEnabled:            true,
+		AnswerTTL:              defaultAnswerTTL,
 	}
 
 	f, err := os.Open(path)
@@ -318,18 +318,18 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 				cfg.ActiveDomainsFile = value
 			case "passive_domains_file":
 				cfg.PassiveDomainsFile = value
-			case "resolve_interval":
+			case "passive_resolve_interval":
 				d, err := time.ParseDuration(value)
 				if err != nil || d <= 0 {
-					return cfg, fmt.Errorf("%s:%d: invalid resolve_interval %q", path, lineNo, value)
+					return cfg, fmt.Errorf("%s:%d: invalid passive_resolve_interval %q", path, lineNo, value)
 				}
-				cfg.ResolveInterval = d
-			case "resolve_parallel":
+				cfg.PassiveResolveInterval = d
+			case "passive_resolve_parallel":
 				v, err := strconv.Atoi(value)
 				if err != nil || v <= 0 {
-					return cfg, fmt.Errorf("%s:%d: invalid resolve_parallel %q", path, lineNo, value)
+					return cfg, fmt.Errorf("%s:%d: invalid passive_resolve_parallel %q", path, lineNo, value)
 				}
-				cfg.ResolveParallel = v
+				cfg.PassiveResolveParallel = v
 			case "server", "address", "listen":
 				cfg.ListenAddr = value
 			case "logs_enabled":

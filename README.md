@@ -47,15 +47,15 @@ Passive mode runs without DNS listeners or fallback forwarding. It reads literal
 ```ini
 mode=passive
 passive_domains_file=passive-domains.txt
-resolve_interval=24h
-resolve_parallel=16
+passive_resolve_interval=24h
+passive_resolve_parallel=16
 ```
 
-Run the provided Passive sample with `go run . --config ipscoutdns-passive.conf`. Edit `passive-domains.txt` to choose the domains. It accepts one ASCII hostname per line (punycode for international names), blank lines and `#`/`;` comments. Names are lowercased, a trailing dot is removed, and duplicates are resolved once per pass. Regexes, wildcards, URLs and IP addresses are rejected.
+Both modes use the same `ipscoutdns.conf`: change `mode=active` to `mode=passive` and run `go run . --config ipscoutdns.conf`. Upstream resolvers, interface selectors, probe settings, and output paths are shared. Edit `passive-domains.txt` to choose the domains. It accepts one ASCII hostname per line (punycode for international names), blank lines and `#`/`;` comments. Names are lowercased, a trailing dot is removed, and duplicates are resolved once per pass. Regexes, wildcards, URLs and IP addresses are rejected.
 
-The first pass starts immediately. After a complete pass, the daemon waits `resolve_interval` (default `24h`), reloads the domain list, and starts another pass. Passes never overlap. A missing/invalid list fails startup; a later list error is logged and that pass is skipped. An empty list is allowed and performs no work until the next reload.
+The first pass starts immediately. After a complete pass, the daemon waits `passive_resolve_interval` (default `24h`), reloads the domain list, and starts another pass. Passes never overlap. A missing/invalid list fails startup; a later list error is logged and that pass is skipped. An empty list is allowed and performs no work until the next reload.
 
-`resolve_parallel` (default `16`) limits concurrent **domain** jobs. `parallel_tests` still limits concurrent IP probes **within each domain**, so 16 domain jobs with 16 probes each may run up to 256 probes concurrently. Reduce either setting for smaller devices. Every Passive pass performs fresh DNS discovery and probing regardless of the Active cache TTL. A failed lookup records the domain as unreachable. ICMP results classify IP reachability; only a TLS-ready candidate is selected as a working domain answer.
+`passive_resolve_parallel` (default `16`) limits concurrent **domain** jobs. `parallel_tests` still limits concurrent IP probes **within each domain**, so 16 domain jobs with 16 probes each may run up to 256 probes concurrently. Reduce either setting for smaller devices. Every Passive pass performs fresh DNS discovery and probing regardless of the Active cache TTL. A failed lookup records the domain as unreachable. ICMP results classify IP reachability; only a TLS-ready candidate is selected as a working domain answer.
 
 This is a breaking config change: `mode` is required and `domains_file` has been removed. Replace it with `active_domains_file` for existing DNS-server deployments. Passive configs require `passive_domains_file`; listener/fallback addresses and the fallback interface are unused in that mode. Both modes require at least one upstream resolver.
 

@@ -79,7 +79,7 @@ func main() {
 		logger.Printf("loaded %d domain filters from %s", len(domainRegexes), cfg.ActiveDomainsFile)
 	} else {
 		logger.Printf("passive domains: %s", cfg.PassiveDomainsFile)
-		logger.Printf("resolve interval: %s; parallel domains: %d", cfg.ResolveInterval, cfg.ResolveParallel)
+		logger.Printf("resolve interval: %s; parallel domains: %d", cfg.PassiveResolveInterval, cfg.PassiveResolveParallel)
 	}
 	logger.Printf("direct DNS resolvers: %d", len(cfg.DirectDNS))
 	logger.Printf("proxy DNS resolvers: %d", len(cfg.ProxyDNS))

@@ -36,11 +36,13 @@ func TestModeConfig(t *testing.T) {
 		{"missing active list", "mode=active\n", "active_domains_file is required"},
 		{"missing passive list", "mode=passive\n", "passive_domains_file is required"},
 		{"removed key", "mode=active\ndomains_file=list.txt\n", "domains_file was removed"},
-		{"zero interval", "mode=passive\npassive_domains_file=list.txt\nresolve_interval=0s\n", "invalid resolve_interval"},
-		{"bad interval", "mode=passive\npassive_domains_file=list.txt\nresolve_interval=tomorrow\n", "invalid resolve_interval"},
-		{"zero parallel", "mode=passive\npassive_domains_file=list.txt\nresolve_parallel=0\n", "invalid resolve_parallel"},
-		{"negative parallel", "mode=passive\npassive_domains_file=list.txt\nresolve_parallel=-1\n", "invalid resolve_parallel"},
-		{"bad parallel", "mode=passive\npassive_domains_file=list.txt\nresolve_parallel=lots\n", "invalid resolve_parallel"},
+		{"unprefixed interval rejected", "mode=passive\npassive_domains_file=list.txt\nresolve_interval=24h\n", "unsupported setting"},
+		{"unprefixed parallel rejected", "mode=passive\npassive_domains_file=list.txt\nresolve_parallel=16\n", "unsupported setting"},
+		{"zero interval", "mode=passive\npassive_domains_file=list.txt\npassive_resolve_interval=0s\n", "invalid passive_resolve_interval"},
+		{"bad interval", "mode=passive\npassive_domains_file=list.txt\npassive_resolve_interval=tomorrow\n", "invalid passive_resolve_interval"},
+		{"zero parallel", "mode=passive\npassive_domains_file=list.txt\npassive_resolve_parallel=0\n", "invalid passive_resolve_parallel"},
+		{"negative parallel", "mode=passive\npassive_domains_file=list.txt\npassive_resolve_parallel=-1\n", "invalid passive_resolve_parallel"},
+		{"bad parallel", "mode=passive\npassive_domains_file=list.txt\npassive_resolve_parallel=lots\n", "invalid passive_resolve_parallel"},
 		{"active needs listener", "mode=active\nactive_domains_file=list.txt\nserver=\n", "cannot be empty"},
 		{"active needs fallback", "mode=active\nactive_domains_file=list.txt\nfallback_dns=\n", "cannot be empty"},
 	}
@@ -56,14 +58,14 @@ func TestModeConfig(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.ResolveInterval != 24*time.Hour || cfg.ResolveParallel != 16 {
-				t.Fatalf("passive defaults = %s / %d, want 24h / 16", cfg.ResolveInterval, cfg.ResolveParallel)
+			if cfg.PassiveResolveInterval != 24*time.Hour || cfg.PassiveResolveParallel != 16 {
+				t.Fatalf("passive defaults = %s / %d, want 24h / 16", cfg.PassiveResolveInterval, cfg.PassiveResolveParallel)
 			}
 		})
 	}
 	t.Run("custom schedule", func(t *testing.T) {
-		cfg, err := loadConfig(writeModeTestFile(t, "mode=passive\npassive_domains_file=list.txt\nproxy_dns=9.9.9.9\nresolve_interval=30m\nresolve_parallel=4\n"))
-		if err != nil || cfg.ResolveInterval != 30*time.Minute || cfg.ResolveParallel != 4 {
+		cfg, err := loadConfig(writeModeTestFile(t, "mode=passive\npassive_domains_file=list.txt\nproxy_dns=9.9.9.9\npassive_resolve_interval=30m\npassive_resolve_parallel=4\n"))
+		if err != nil || cfg.PassiveResolveInterval != 30*time.Minute || cfg.PassiveResolveParallel != 4 {
 			t.Fatalf("config = %+v, error = %v", cfg, err)
 		}
 	})
@@ -77,13 +79,25 @@ func TestModeConfig(t *testing.T) {
 	})
 }
 
-func TestPassiveSampleConfig(t *testing.T) {
-	cfg, err := loadConfig("ipscoutdns-passive.conf")
+func TestSharedSampleConfigSupportsPassiveMode(t *testing.T) {
+	contents, err := os.ReadFile("ipscoutdns.conf")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Mode != "passive" || cfg.PassiveDomainsFile != "passive-domains.txt" || cfg.ResolveParallel != 16 || cfg.ResolveInterval != 24*time.Hour {
+	active, err := loadConfig("ipscoutdns.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(writeModeTestFile(t, strings.Replace(string(contents), "mode=active", "mode=passive", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode != "passive" || cfg.PassiveDomainsFile != "passive-domains.txt" || cfg.PassiveResolveParallel != 16 || cfg.PassiveResolveInterval != 24*time.Hour {
 		t.Fatalf("unexpected passive config: %+v", cfg)
+	}
+	active.Mode = "passive"
+	if !reflect.DeepEqual(cfg, active) {
+		t.Fatal("switching mode changed shared configuration")
 	}
 	if _, err := loadPassiveDomainsFile(cfg.PassiveDomainsFile); err != nil {
 		t.Fatal(err)
@@ -140,7 +154,7 @@ func TestPassiveBatchParallelLimit(t *testing.T) {
 	var completed, running, peak atomic.Int32
 	done := make(chan struct{})
 	go func() {
-		runPassiveBatch(ctx, domains, Config{ResolveParallel: 16}, func(ctx context.Context, _ string, _ Config) {
+		runPassiveBatch(ctx, domains, Config{PassiveResolveParallel: 16}, func(ctx context.Context, _ string, _ Config) {
 			n := running.Add(1)
 			defer running.Add(-1)
 			for old := peak.Load(); n > old; old = peak.Load() {
@@ -182,7 +196,7 @@ func TestPassiveBatchParallelLimit(t *testing.T) {
 
 func TestPassiveScheduleReloadsAfterCompletedPass(t *testing.T) {
 	ctx := context.Background()
-	cfg := Config{PassiveDomainsFile: "list", ResolveParallel: 1, ResolveInterval: 24 * time.Hour}
+	cfg := Config{PassiveDomainsFile: "list", PassiveResolveParallel: 1, PassiveResolveInterval: 24 * time.Hour}
 	loads, waits := 0, 0
 	var resolved []string
 	err := runPassiveWith(ctx, cfg, func(string) ([]string, error) {
@@ -206,7 +220,7 @@ func TestPassiveScheduleReloadsAfterCompletedPass(t *testing.T) {
 }
 
 func TestPassiveListReadFailures(t *testing.T) {
-	cfg := Config{PassiveDomainsFile: "list", ResolveParallel: 1, ResolveInterval: time.Hour}
+	cfg := Config{PassiveDomainsFile: "list", PassiveResolveParallel: 1, PassiveResolveInterval: time.Hour}
 	loadError := fmt.Errorf("invalid list")
 	if err := runPassiveWith(context.Background(), cfg, func(string) ([]string, error) {
 		return nil, loadError
@@ -242,7 +256,7 @@ func TestPassiveCancellation(t *testing.T) {
 	done := make(chan struct{})
 	var count atomic.Int32
 	go func() {
-		runPassiveBatch(ctx, []string{"first.example", "second.example"}, Config{ResolveParallel: 1}, func(ctx context.Context, _ string, _ Config) {
+		runPassiveBatch(ctx, []string{"first.example", "second.example"}, Config{PassiveResolveParallel: 1}, func(ctx context.Context, _ string, _ Config) {
 			count.Add(1)
 			close(started)
 			<-ctx.Done()

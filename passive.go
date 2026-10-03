@@ -103,14 +103,14 @@ func runPassiveWith(ctx context.Context, cfg Config, load func(string) ([]string
 			}
 			logger.Printf("skipping passive pass: %v", err)
 		} else {
-			logger.Printf("passive pass: %d domains, up to %d parallel resolves", len(domains), cfg.ResolveParallel)
+			logger.Printf("passive pass: %d domains, up to %d parallel resolves", len(domains), cfg.PassiveResolveParallel)
 			runPassiveBatch(ctx, domains, cfg, resolve)
 			if ctx.Err() == nil {
-				logger.Printf("passive pass complete; next pass in %s", cfg.ResolveInterval)
+				logger.Printf("passive pass complete; next pass in %s", cfg.PassiveResolveInterval)
 			}
 		}
 		firstPass = false
-		if !wait(ctx, cfg.ResolveInterval) {
+		if !wait(ctx, cfg.PassiveResolveInterval) {
 			break
 		}
 	}
@@ -118,7 +118,7 @@ func runPassiveWith(ctx context.Context, cfg Config, load func(string) ([]string
 }
 
 func runPassiveBatch(ctx context.Context, domains []string, cfg Config, resolve passiveResolveFunc) {
-	parallel := cfg.ResolveParallel
+	parallel := cfg.PassiveResolveParallel
 	if parallel > len(domains) {
 		parallel = len(domains)
 	}

@@ -275,6 +275,67 @@ func TestInconclusiveChecksDoNotChangeDomainStatus(t *testing.T) {
 	}
 }
 
+func TestICMPRespectsTCPRoute(t *testing.T) {
+	previousConfig := currentConfig
+	t.Cleanup(func() { currentConfig = previousConfig })
+	for _, mode := range []string{"active", "passive"} {
+		for _, route := range []string{"direct", "proxy"} {
+			t.Run(mode+"/"+route, func(t *testing.T) {
+				dir := t.TempDir()
+				cfg := Config{
+					Mode: mode, TLSRoute: route, DirectDNS: []string{"test"},
+					HTTPProbe: true, MaxParallelTests: 1,
+					ReachableIPsFile:       filepath.Join(dir, "reachable.ips"),
+					UnreachableIPsFile:     filepath.Join(dir, "unreachable.ips"),
+					UnreachableDomainsFile: filepath.Join(dir, "unreachable.domains"),
+				}
+				currentConfig = cfg
+				const domain = "icmp-route.example"
+				const ip = "192.0.2.1"
+				deleteCache(domain)
+				t.Cleanup(func() { deleteCache(domain) })
+				query := func(context.Context, string, string, bool, Config) []string { return []string{ip} }
+				tlsCheck := func(context.Context, string, string, Config) tlsProbeResult { return tlsProbeResult{} }
+				httpCheck := func(context.Context, string, string, Config) httpProbeResult { return httpProbeResult{} }
+				pingCalls := 0
+				pingCheck := func(string) bool { pingCalls++; return true }
+				if mode == "passive" {
+					resolvePassiveDomainWithProbes(context.Background(), domain, cfg, query, tlsCheck, httpCheck, pingCheck)
+				} else {
+					_, ok, _ := resolveAndSelectWithProbes(context.Background(), domain, cfg, query, tlsCheck, httpCheck, pingCheck)
+					if ok {
+						t.Error("failed TCP checks selected an IP")
+					}
+				}
+				wantCalls := 0
+				if route == "direct" {
+					wantCalls = 1
+				}
+				if pingCalls != wantCalls {
+					t.Fatalf("ICMP calls = %d, want %d", pingCalls, wantCalls)
+				}
+				for path, present := range map[string]bool{cfg.ReachableIPsFile: route == "direct", cfg.UnreachableIPsFile: route == "proxy"} {
+					contents, err := os.ReadFile(path)
+					if err != nil && !os.IsNotExist(err) {
+						t.Fatal(err)
+					}
+					want := ""
+					if present {
+						want = ip + "\n"
+					}
+					if string(contents) != want {
+						t.Fatalf("%s = %q, want %q", path, contents, want)
+					}
+				}
+				contents, err := os.ReadFile(cfg.UnreachableDomainsFile)
+				if err != nil || string(contents) != domain+"\n" {
+					t.Fatalf("domain status = %q, error = %v", contents, err)
+				}
+			})
+		}
+	}
+}
+
 func TestHTTPProbeToggle(t *testing.T) {
 	previousConfig := currentConfig
 	t.Cleanup(func() { currentConfig = previousConfig })

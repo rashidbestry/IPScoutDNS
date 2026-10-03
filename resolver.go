@@ -203,10 +203,15 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		}
 	}
 
-	icmpResults := runIPChecks(ctx, tcpFailed, cfg.MaxParallelTests, func(ip string) bool {
-		logger.Printf("%s: ICMP testing %s after TCP failure", domain, ip)
-		return pingCheck(ip)
-	})
+	var icmpResults map[string]bool
+	// ICMP cannot use the SOCKS5 route. Never use a direct ping to validate
+	// reachability after a failed proxy connection.
+	if cfg.TLSRoute != "proxy" {
+		icmpResults = runIPChecks(ctx, tcpFailed, cfg.MaxParallelTests, func(ip string) bool {
+			logger.Printf("%s: ICMP testing %s after TCP failure", domain, ip)
+			return pingCheck(ip)
+		})
+	}
 	if ctx.Err() != nil {
 		return "", false, false
 	}

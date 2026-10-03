@@ -67,7 +67,7 @@ This is a breaking config change: `mode` is required and `domains_file` has been
 
 `http_probe=true` enables HTTP fallback when no candidate passes TLS. It defaults to `true` when omitted. Set `http_probe=false` to skip HTTP checks and require TLS for domain reachability. This setting applies in both Active and Passive mode; hosts output and DNS IP selection always require TLS.
 
-After TCP failure, ICMP checks try up to three single-packet pings and stop on the first success. Each attempt waits up to one second for the reply, with a two-second process deadline. Failed attempts are logged. A successful TCP or ICMP recheck removes the IP from `unreachable.ips`; previous entries remain until the service checks that IP again.
+With `tcp_route=direct`, after TCP failure, ICMP checks try up to three single-packet pings and stop on the first success. Each attempt waits up to one second for the reply, with a two-second process deadline. Failed attempts are logged. With `tcp_route=proxy`, ICMP is skipped entirely and IPs whose TCP checks fail are marked unreachable. This applies in both Active and Passive mode. A successful TCP or direct ICMP recheck removes the IP from `unreachable.ips`; previous entries remain until the service checks that IP again.
 
 ## Configuration lookup
 

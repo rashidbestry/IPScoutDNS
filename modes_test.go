@@ -280,7 +280,7 @@ func TestPassiveCancellation(t *testing.T) {
 	}
 }
 
-func TestPassiveResolvesFreshAndRecordsFailure(t *testing.T) {
+func TestPassiveResolvesFreshAndPreservesStatusOnLookupFailure(t *testing.T) {
 	savedConfig := currentConfig
 	t.Cleanup(func() { currentConfig = savedConfig })
 	dir := t.TempDir()
@@ -318,12 +318,12 @@ func TestPassiveResolvesFreshAndRecordsFailure(t *testing.T) {
 	}
 	resolvePassiveDomainWith(context.Background(), domain, cfg, query, tlsCheck, func(string) bool { return false })
 	unreachable, err := os.ReadFile(currentConfig.UnreachableDomainsFile)
-	if queries != 2 || err != nil || strings.TrimSpace(string(unreachable)) != domain {
+	if queries != 2 || !os.IsNotExist(err) || len(unreachable) != 0 {
 		t.Fatalf("queries = %d, unreachable = %q, error = %v", queries, unreachable, err)
 	}
 	reachable, err := os.ReadFile(currentConfig.ReachableDomainsFile)
-	if err != nil || len(reachable) != 0 {
-		t.Fatalf("failed domain remains reachable: %q, error = %v", reachable, err)
+	if err != nil || strings.TrimSpace(string(reachable)) != domain {
+		t.Fatalf("lookup failure changed previous reachable status: %q, error = %v", reachable, err)
 	}
 }
 

@@ -25,14 +25,32 @@ func pingIP(ip string) bool {
 }
 
 func pingIPContext(parent context.Context, ip string) bool {
+	return pingIPWithRunner(parent, ip, func(ctx context.Context, ip string) ([]byte, error) {
+		return exec.CommandContext(ctx, "ping", pingArgs(ip)...).CombinedOutput()
+	})
+}
+
+func pingIPWithRunner(parent context.Context, ip string, run func(context.Context, string) ([]byte, error)) bool {
 	if ip == "" {
 		return false
 	}
-
-	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
-	defer cancel()
-	_, err := exec.CommandContext(ctx, "ping", pingArgs(ip)...).CombinedOutput()
-	return err == nil
+	for attempt := 1; attempt <= 3; attempt++ {
+		if parent.Err() != nil {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+		output, err := run(ctx, ip)
+		ctxErr := ctx.Err()
+		cancel()
+		if err == nil && ctxErr == nil {
+			return true
+		}
+		if parent.Err() != nil {
+			return false
+		}
+		logger.Printf("%s: ICMP attempt %d/3 failed: %v (context=%v); %s", ip, attempt, err, ctxErr, strings.TrimSpace(string(output)))
+	}
+	return false
 }
 
 func appendUniqueLine(path string, value string, seen map[string]bool) {
@@ -46,19 +64,24 @@ func appendUniqueLine(path string, value string, seen map[string]bool) {
 }
 
 func appendUniqueLineLocked(path string, value string, seen map[string]bool) {
+	if path == "" {
+		return
+	}
 	key := path + "\x00" + value
 	if seen[key] {
 		return
 	}
-	seen[key] = true
-
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		logger.Printf("failed to open hosts file %s: %v", path, err)
 		return
 	}
 	defer f.Close()
-	fmt.Fprintln(f, value)
+	if _, err := fmt.Fprintln(f, value); err != nil {
+		logger.Printf("failed to write hosts file %s: %v", path, err)
+		return
+	}
+	seen[key] = true
 }
 
 func removeLineLocked(path string, value string, seen map[string]bool) {
@@ -104,22 +127,7 @@ func recordHost(path string, domain string, ip string) {
 		return
 	}
 
-	key := ip + " " + domain
-	hostsMu.Lock()
-	defer hostsMu.Unlock()
-
-	if writtenReachable[key] {
-		return
-	}
-	writtenReachable[key] = true
-
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		logger.Printf("failed to open hosts file %s: %v", path, err)
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "%s %s\n", ip, domain)
+	appendUniqueLine(path, ip+" "+domain, writtenReachable)
 }
 
 func recordReachableIP(ip string) {

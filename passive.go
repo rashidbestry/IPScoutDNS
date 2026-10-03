@@ -83,7 +83,6 @@ func resolvePassiveDomainWith(ctx context.Context, domain string, cfg Config, qu
 		logger.Printf("%s: WORKING IP = %s", domain, ip)
 	} else {
 		logger.Printf("%s: NO WORKING IP FOUND", domain)
-		recordDomainUnreachable(domain)
 	}
 }
 

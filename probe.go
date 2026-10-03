@@ -18,6 +18,7 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsPr
 	defer cancel()
 	conn, err := dialReachability(ctx, domain, ip, cfg)
 	if err != nil {
+		logger.Printf("%s: TCP probe %s failed (route=%s, proxy=%s): %v", domain, ip, cfg.TLSRoute, cfg.TLSSOCKS5Addr, err)
 		return tlsProbeResult{}
 	}
 	defer conn.Close()
@@ -27,9 +28,13 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsPr
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: true,
 	})
+	err = tlsConn.HandshakeContext(ctx)
+	if err != nil {
+		logger.Printf("%s: TLS handshake %s failed after TCP success: %v", domain, ip, err)
+	}
 	return tlsProbeResult{
 		tcpReachable: true,
-		tlsReady:     tlsConn.HandshakeContext(ctx) == nil,
+		tlsReady:     err == nil,
 	}
 }
 

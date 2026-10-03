@@ -74,7 +74,6 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 	}
 
 	logger.Printf("%s: NO WORKING IP FOUND - DNS fallback", domain)
-	recordDomainUnreachable(domain)
 	forwardDNS(w, req, currentConfig.FallbackDNS)
 }
 
@@ -122,6 +121,7 @@ func resolveAndSelectWithContext(ctx context.Context, domain string, cfg Config,
 			if time.Since(entry.Checked) < cfg.CacheTTL {
 				if cachedIP, valid := normalizeIPv4Candidate(entry.IP); valid {
 					logger.Printf("%s: CACHE HIT = %s", domain, cachedIP)
+					recordReachableHost(domain, cachedIP)
 					return cachedIP, true, true
 				}
 			}
@@ -131,7 +131,9 @@ func resolveAndSelectWithContext(ctx context.Context, domain string, cfg Config,
 
 	ips := collectResolverIPsWithContext(ctx, domain, cfg, query)
 	if len(ips) == 0 {
-		logger.Printf("%s: no resolver returned IPv4 addresses", domain)
+		// Without a candidate IP, no reachability probe was possible. Preserve
+		// the previous status rather than treating a DNS failure as a TCP failure.
+		logger.Printf("%s: no resolver returned IPv4 addresses; domain reachability unknown, keeping previous status", domain)
 		return "", false, false
 	}
 	logger.Printf("%s: collected %d unique IPv4 candidates", domain, len(ips))
@@ -143,11 +145,31 @@ func resolveAndSelectWithContext(ctx context.Context, domain string, cfg Config,
 	if ctx.Err() != nil {
 		return "", false, false
 	}
+	anyTCPReachable := false
+	for _, result := range tlsResults {
+		if result.tcpReachable {
+			anyTCPReachable = true
+			break
+		}
+	}
+	if !anyTCPReachable {
+		// Confirm a completely failed probe round before changing domain status.
+		// Retry only on total TCP failure, using the same timeout and worker limit.
+		logger.Printf("%s: all TCP probes failed; retrying once before classifying domain", domain)
+		tlsResults = runIPChecks(ctx, ips, cfg.MaxParallelTests, func(ip string) tlsProbeResult {
+			return tlsCheck(ctx, domain, ip, cfg)
+		})
+		if ctx.Err() != nil {
+			return "", false, false
+		}
+	}
 
+	domainReachable := false
 	var tcpFailed []string
 	for _, ip := range ips {
 		result := tlsResults[ip]
 		if result.tcpReachable {
+			domainReachable = true
 			recordReachableIP(ip)
 		} else {
 			tcpFailed = append(tcpFailed, ip)
@@ -168,10 +190,17 @@ func resolveAndSelectWithContext(ctx context.Context, domain string, cfg Config,
 			recordUnreachableIP(ip)
 		}
 	}
+	// Domain reachability describes the TCP probe, independently of whether
+	// TLS completed well enough to select an IP for a DNS answer.
+	if domainReachable {
+		recordReachableDomain(domain)
+	} else {
+		recordDomainUnreachable(domain)
+	}
 
 	selectedIP := ""
 	for _, ip := range ips {
-		if tlsResults[ip].tlsReady {
+		if tlsResults[ip].tcpReachable && tlsResults[ip].tlsReady {
 			recordReachableHost(domain, ip)
 			if selectedIP == "" {
 				selectedIP = ip

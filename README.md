@@ -55,9 +55,13 @@ Both modes use the same `ipscoutdns.conf`: change `mode=active` to `mode=passive
 
 The first pass starts immediately. After a complete pass, the daemon waits `passive_resolve_interval` (default `24h`), reloads the domain list, and starts another pass. Passes never overlap. A missing/invalid list fails startup; a later list error is logged and that pass is skipped. An empty list is allowed and performs no work until the next reload.
 
-`passive_resolve_parallel` (default `16`) limits concurrent **domain** jobs. `parallel_tests` still limits concurrent IP probes **within each domain**, so 16 domain jobs with 16 probes each may run up to 256 probes concurrently. Reduce either setting for smaller devices. Every Passive pass performs fresh DNS discovery and probing regardless of the Active cache TTL. A failed lookup records the domain as unreachable. ICMP results classify IP reachability; only a TLS-ready candidate is selected as a working domain answer.
+`passive_resolve_parallel` (default `16`) limits concurrent **domain** jobs. `parallel_tests` still limits concurrent IP probes **within each domain**, so 16 domain jobs with 16 probes each may run up to 256 probes concurrently. Reduce either setting for smaller devices. Every Passive pass performs fresh DNS discovery and probing regardless of the Active cache TTL. A lookup with no IPv4 candidates leaves domain reachability unknown and preserves the previous output status. A successful TCP probe records the domain as reachable even if the TLS handshake fails. If every TCP probe fails, the service retries the candidate IPs once before recording the domain as unreachable; this can add another probe round to a failed request. ICMP results classify IP reachability; only a TLS-ready candidate is selected as a working domain answer. Each domain is removed from the opposite output list when its status changes.
 
 This is a breaking config change: `mode` is required and `domains_file` has been removed. Replace it with `active_domains_file` for existing DNS-server deployments. Passive configs require `passive_domains_file`; listener/fallback addresses and the fallback interface are unused in that mode. Both modes require at least one upstream resolver.
+
+`reachable.hosts` appends `IP domain` pairs during runtime only when both TCP and TLS succeed, and on cache hits for previously successful pairs. It retains previously observed pairs and avoids duplicate writes within the running process.
+
+After TCP failure, ICMP checks try up to three single-packet pings and stop on the first success. Each attempt waits up to one second for the reply, with a two-second process deadline. Failed attempts are logged. A successful TCP or ICMP recheck removes the IP from `unreachable.ips`; previous entries remain until the service checks that IP again.
 
 ## Configuration lookup
 

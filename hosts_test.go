@@ -1,10 +1,102 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"testing"
 )
+
+func TestPingRetriesAndStopsAfterSuccess(t *testing.T) {
+	calls := 0
+	got := pingIPWithRunner(context.Background(), "192.0.2.1", func(context.Context, string) ([]byte, error) {
+		calls++
+		if calls < 3 {
+			return []byte("Request timed out."), errors.New("exit status 1")
+		}
+		return nil, nil
+	})
+	if !got || calls != 3 {
+		t.Fatalf("reachable = %v, calls = %d; want true, 3", got, calls)
+	}
+	calls = 0
+	got = pingIPWithRunner(context.Background(), "192.0.2.1", func(context.Context, string) ([]byte, error) {
+		calls++
+		return nil, nil
+	})
+	if !got || calls != 1 {
+		t.Fatalf("reachable = %v, calls = %d; want true, 1", got, calls)
+	}
+}
+
+func TestPingFailureAndCancellation(t *testing.T) {
+	calls := 0
+	run := func(context.Context, string) ([]byte, error) {
+		calls++
+		return nil, errors.New("ping failed")
+	}
+	if pingIPWithRunner(context.Background(), "192.0.2.1", run) || calls != 3 {
+		t.Fatalf("persistent failure calls = %d, want 3", calls)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	calls = 0
+	got := pingIPWithRunner(ctx, "192.0.2.1", func(context.Context, string) ([]byte, error) {
+		calls++
+		cancel()
+		return nil, context.Canceled
+	})
+	if got || calls != 1 {
+		t.Fatalf("canceled ping reachable = %v, calls = %d", got, calls)
+	}
+}
+
+func TestReachableIPRemovesPreviousFailure(t *testing.T) {
+	previousConfig := currentConfig
+	t.Cleanup(func() { currentConfig = previousConfig })
+	dir := t.TempDir()
+	currentConfig = Config{
+		ReachableIPsFile:   filepath.Join(dir, "reachable.ips"),
+		UnreachableIPsFile: filepath.Join(dir, "unreachable.ips"),
+	}
+	const ip = "192.0.2.1"
+	recordUnreachableIP(ip)
+	recordReachableIP(ip)
+	unreachable, err := os.ReadFile(currentConfig.UnreachableIPsFile)
+	if err != nil || len(unreachable) != 0 {
+		t.Fatalf("unreachable = %q, error = %v", unreachable, err)
+	}
+	reachable, err := os.ReadFile(currentConfig.ReachableIPsFile)
+	if err != nil || string(reachable) != ip+"\n" {
+		t.Fatalf("reachable = %q, error = %v", reachable, err)
+	}
+}
+
+func TestRecordHostRetriesFailedWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "outputs", "reachable.hosts")
+	recordHost(path, "example.com", "192.0.2.1")
+	if err := os.Mkdir(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	recordHost(path, "example.com", "192.0.2.1")
+	recordHost(path, "example.com", "192.0.2.1")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "192.0.2.1 example.com\n" {
+		t.Fatalf("hosts = %q", contents)
+	}
+	otherPath := filepath.Join(dir, "other.hosts")
+	recordHost(otherPath, "example.com", "192.0.2.1")
+	other, err := os.ReadFile(otherPath)
+	if err != nil || string(other) != string(contents) {
+		t.Fatalf("other hosts = %q, error = %v", other, err)
+	}
+}
 
 func TestPingArgs(t *testing.T) {
 	var want []string

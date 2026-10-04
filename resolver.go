@@ -131,7 +131,13 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 			if time.Since(entry.Checked) < cfg.CacheTTL {
 				if cachedIP, valid := normalizeIPv4Candidate(entry.IP); valid {
 					logger.Printf("%s: CACHE HIT = %s [%s]", domain, cachedIP, entry.Protocol)
-					recordReachableHost(domain, cachedIP)
+					if cfg.HostsMaxIPsPerDomain > 0 {
+						updateReachableHosts(domain, []string{cachedIP}, cfg.HostsMaxIPsPerDomain, true)
+						recordReachableDomain(domain)
+						recordReachableIP(cachedIP)
+					} else {
+						recordReachableHost(domain, cachedIP)
+					}
 					return cachedIP, true, true
 				}
 			}
@@ -164,12 +170,15 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		_ = conn.Close()
 		return tlsProbeResult{tcpReachable: true}
 	}
-	tlsResults := runIPChecks(ctx, ips, cfg.MaxParallelTests, func(ip string) tlsProbeResult {
+	tlsPassed := func(result tlsProbeResult) bool {
+		return candidateProbePassed(cfg, result, httpProbeResult{}, false)
+	}
+	tlsResults, limitReached := runIPChecksLimited(ctx, ips, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain, func(ip string) tlsProbeResult {
 		if cfg.TCPProbe || cfg.TLSProbe {
 			logger.Printf("%s: TCP/TLS testing %s", domain, ip)
 		}
 		return checkTCPOrTLS(ip)
-	})
+	}, tlsPassed)
 	if ctx.Err() != nil {
 		return "", false, false
 	}
@@ -184,9 +193,9 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		// Confirm a completely failed probe round before changing domain status.
 		// Retry only on total TCP failure, using the same timeout and worker limit.
 		logger.Printf("%s: all TCP probes failed; retrying once before classifying domain", domain)
-		tlsResults = runIPChecks(ctx, ips, cfg.MaxParallelTests, func(ip string) tlsProbeResult {
+		tlsResults, limitReached = runIPChecksLimited(ctx, ips, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain, func(ip string) tlsProbeResult {
 			return checkTCPOrTLS(ip)
-		})
+		}, tlsPassed)
 		if ctx.Err() != nil {
 			return "", false, false
 		}
@@ -202,9 +211,9 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	var httpResults map[string]httpProbeResult
 	if !domainReachable && cfg.HTTPProbe {
 		logger.Printf("%s: no TLS-ready IP; checking HTTP on port 80", domain)
-		httpResults = runIPChecks(ctx, ips, cfg.MaxParallelTests, func(ip string) httpProbeResult {
+		httpResults, limitReached = runIPChecksLimited(ctx, ips, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain, func(ip string) httpProbeResult {
 			return httpCheck(ctx, domain, ip, cfg)
-		})
+		}, func(result httpProbeResult) bool { return result.tcpReachable && result.httpReady })
 		if ctx.Err() != nil {
 			return "", false, false
 		}
@@ -218,7 +227,12 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	}
 	var tcpFailed []string
 	for _, ip := range ips {
-		result := tlsResults[ip]
+		result, tlsChecked := tlsResults[ip]
+		_, httpChecked := httpResults[ip]
+		// Candidates skipped at the quota have unknown status, not failed status.
+		if !tlsChecked && !httpChecked {
+			continue
+		}
 		if result.tcpReachable || httpResults[ip].tcpReachable {
 			recordReachableIP(ip)
 		} else {
@@ -229,16 +243,21 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	var icmpResults map[string]bool
 	// ICMP cannot use the SOCKS5 route. Never use a direct ping to validate
 	// reachability after a failed proxy connection.
-	if cfg.ICMPProbe && cfg.TLSRoute != "proxy" {
-		icmpResults = runIPChecks(ctx, tcpFailed, cfg.MaxParallelTests, func(ip string) bool {
+	if !limitReached && cfg.ICMPProbe && cfg.TLSRoute != "proxy" {
+		icmpResults, limitReached = runIPChecksLimited(ctx, tcpFailed, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain, func(ip string) bool {
 			logger.Printf("%s: ICMP testing %s after TCP failure", domain, ip)
 			return pingCheck(ip)
-		})
+		}, func(result bool) bool { return candidateProbePassed(cfg, tlsProbeResult{}, httpProbeResult{}, result) })
 	}
 	if ctx.Err() != nil {
 		return "", false, false
 	}
 	for _, ip := range tcpFailed {
+		if limitReached {
+			if _, checked := icmpResults[ip]; !checked {
+				continue
+			}
+		}
 		if icmpResults[ip] {
 			recordReachableIP(ip)
 		} else {
@@ -259,16 +278,32 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		recordDomainUnreachable(domain)
 	}
 
+	if limitReached {
+		logger.Printf("%s: reached %d successful IPs; skipping remaining probes", domain, cfg.HostsMaxIPsPerDomain)
+	}
 	selectedIP, selectedProtocol := "", ""
+	var hostIPs []string
 	for _, ip := range ips {
 		protocol := candidateProbeProtocol(cfg, tlsResults[ip], httpResults[ip], icmpResults[ip])
 		if protocol != "" {
-			recordReachableHost(domain, ip)
+			hostIPs = append(hostIPs, ip)
 		}
 		// HTTP is only probed when no candidate passes TLS, so TLS always wins.
 		if protocol != "" && selectedIP == "" {
 			selectedIP = ip
 			selectedProtocol = protocol
+		}
+	}
+	if cfg.HostsMaxIPsPerDomain > 0 {
+		// Refresh the domain's mappings rather than accumulating new IPs across
+		// Active resolutions, restarts, or scheduled Passive passes.
+		updateReachableHosts(domain, hostIPs, cfg.HostsMaxIPsPerDomain, false)
+	}
+	for _, ip := range hostIPs {
+		if cfg.HostsMaxIPsPerDomain > 0 {
+			recordReachableIP(ip)
+		} else {
+			recordReachableHost(domain, ip)
 		}
 	}
 	if selectedIP == "" {
@@ -395,6 +430,34 @@ func queryResolver(ctx context.Context, domain string, server string, throughSOC
 		return queryDNSSOCKS5(ctx, domain, cfg.DNSSOCKS5Addr, server)
 	}
 	return queryDNS(ctx, domain, server, cfg)
+}
+
+// Limit each batch to the remaining success quota. Even with a large worker
+// count, no extra candidate is launched after enough successful results exist.
+func runIPChecksLimited[T any](ctx context.Context, ips []string, parallel, limit int, check func(string) T, passed func(T) bool) (map[string]T, bool) {
+	if limit <= 0 {
+		return runIPChecks(ctx, ips, parallel, check), false
+	}
+	if parallel <= 0 {
+		parallel = defaultMaxParallel
+	}
+	results := make(map[string]T)
+	successes := 0
+	for start := 0; start < len(ips) && ctx.Err() == nil; {
+		size := min(parallel, limit-successes, len(ips)-start)
+		batch := runIPChecks(ctx, ips[start:start+size], size, check)
+		for ip, result := range batch {
+			results[ip] = result
+			if passed(result) {
+				successes++
+			}
+		}
+		if successes >= limit {
+			return results, true
+		}
+		start += size
+	}
+	return results, false
 }
 
 func runIPChecks[T any](ctx context.Context, ips []string, parallel int, check func(string) T) map[string]T {

@@ -27,6 +27,7 @@ const (
 	defaultTLSPort                = 443
 	defaultTLSRoute               = "direct"
 	defaultMaxParallel            = 16
+	defaultHostsMaxIPsPerDomain   = 8
 	defaultAnswerTTL              = uint32(300)
 	defaultPassiveResolveInterval = 24 * time.Hour
 	defaultPassiveResolveParallel = 16
@@ -60,6 +61,7 @@ type Config struct {
 	ICMPProbe              bool
 	HTTPProbe              bool
 	MaxParallelTests       int
+	HostsMaxIPsPerDomain   int
 	LogsEnabled            bool
 	AnswerTTL              uint32
 	ReachableHostsFile     string
@@ -148,6 +150,9 @@ func (c Config) validateWithInterfaceValidator(validateInterface func(string) er
 	}
 	if c.MaxParallelTests <= 0 {
 		return fmt.Errorf("server.parallel_tests must be greater than zero")
+	}
+	if c.HostsMaxIPsPerDomain < 0 {
+		return fmt.Errorf("hosts_max_ips_per_domain must be zero (unlimited) or greater")
 	}
 	if c.AnswerTTL <= 0 {
 		return fmt.Errorf("server.answer_ttl must be greater than zero")
@@ -249,6 +254,7 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 		ICMPProbe:              true,
 		HTTPProbe:              true,
 		MaxParallelTests:       defaultMaxParallel,
+		HostsMaxIPsPerDomain:   defaultHostsMaxIPsPerDomain,
 		LogsEnabled:            true,
 		AnswerTTL:              defaultAnswerTTL,
 	}
@@ -475,6 +481,12 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 					return cfg, fmt.Errorf("%s:%d: invalid parallel_tests %q", path, lineNo, value)
 				}
 				cfg.MaxParallelTests = v
+			case "hosts_max_ips_per_domain":
+				v, err := strconv.Atoi(value)
+				if err != nil || v < 0 {
+					return cfg, fmt.Errorf("%s:%d: invalid hosts_max_ips_per_domain %q", path, lineNo, value)
+				}
+				cfg.HostsMaxIPsPerDomain = v
 			case "answer_ttl":
 				v, err := strconv.ParseUint(value, 10, 32)
 				if err != nil || v <= 0 {

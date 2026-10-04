@@ -100,6 +100,7 @@ func main() {
 	}
 	logger.Printf("TLS SOCKS5 proxy: %s", cfg.TLSSOCKS5Addr)
 	logger.Printf("parallel TLS tests: %d", cfg.MaxParallelTests)
+	logger.Printf("maximum host IPs per domain: %d (0 = unlimited)", cfg.HostsMaxIPsPerDomain)
 	if !cfg.LogsEnabled {
 		logger.SetOutput(io.Discard)
 	}

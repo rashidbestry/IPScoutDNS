@@ -160,6 +160,67 @@ func recordReachableHost(domain string, ip string) {
 	recordReachableIP(ip)
 }
 
+// Refresh only this domain's mappings while preserving other domain outputs.
+// Cache hits retain existing candidates within the limit; fresh checks replace them.
+// The mutex also protects concurrent Active requests and Passive domain jobs.
+func updateReachableHosts(domain string, ips []string, limit int, keepExisting bool) {
+	path := currentConfig.ReachableHostsFile
+	if path == "" {
+		return
+	}
+	hostsMu.Lock()
+	defer hostsMu.Unlock()
+	contents, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		logger.Printf("failed to read hosts file %s: %v", path, err)
+		return
+	}
+	var lines []string
+	// Do not mutate the caller's slice when retaining existing cache-hit mappings.
+	candidates := append([]string(nil), ips...)
+	for _, line := range strings.Split(string(contents), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[1] == domain {
+			if keepExisting {
+				candidates = append(candidates, fields[0])
+			}
+			continue
+		}
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	seen := make(map[string]bool)
+	for _, ip := range candidates {
+		if seen[ip] {
+			continue
+		}
+		if limit > 0 && len(seen) >= limit {
+			break
+		}
+		seen[ip] = true
+		lines = append(lines, ip+" "+domain)
+	}
+	output := strings.Join(lines, "\n")
+	if output != "" {
+		output += "\n"
+	}
+	if output != string(contents) {
+		if err := os.WriteFile(path, []byte(output), 0644); err != nil {
+			logger.Printf("failed to update hosts file %s: %v", path, err)
+			return
+		}
+	}
+	for key := range writtenReachable {
+		if strings.HasPrefix(key, path+"\x00") && strings.HasSuffix(key, " "+domain) {
+			delete(writtenReachable, key)
+		}
+	}
+	for ip := range seen {
+		writtenReachable[path+"\x00"+ip+" "+domain] = true
+	}
+}
+
 func recordDomainUnreachable(domain string) {
 	if domain == "" {
 		return

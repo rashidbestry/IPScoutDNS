@@ -80,6 +80,9 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsPr
 	}
 	defer conn.Close()
 
+	if !cfg.TLSProbe {
+		return tlsProbeResult{tcpReachable: true}
+	}
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:         domain,
 		MinVersion:         tls.VersionTLS12,

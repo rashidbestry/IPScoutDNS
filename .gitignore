@@ -3,4 +3,5 @@
 *.domains
 *.ips
 *.md
-!README.md
+.venv
+.go-cache

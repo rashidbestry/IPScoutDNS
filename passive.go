@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -91,13 +92,26 @@ func resolvePassiveDomainWithProbes(ctx context.Context, domain string, cfg Conf
 }
 
 func runPassive(ctx context.Context, cfg Config) error {
-	return runPassiveWith(ctx, cfg, loadPassiveDomainsFile, resolvePassiveDomain, waitPassiveInterval)
+	return runPassiveWithCleanup(ctx, cfg, loadPassiveDomainsFile, resolvePassiveDomain, waitPassiveInterval, func() error {
+		return clearPassiveOutputDirectory("/tmp/ipscoutdns")
+	})
 }
 
 // Passes never overlap. The interval starts when a complete pass finishes.
 // Reloading the file each pass allows list updates without restarting the daemon.
 func runPassiveWith(ctx context.Context, cfg Config, load func(string) ([]string, error), resolve passiveResolveFunc, wait func(context.Context, time.Duration) bool) error {
+	return runPassiveWithCleanup(ctx, cfg, load, resolve, wait, func() error { return nil })
+}
+
+func runPassiveWithCleanup(ctx context.Context, cfg Config, load func(string) ([]string, error), resolve passiveResolveFunc, wait func(context.Context, time.Duration) bool, cleanup func() error) error {
 	firstPass := true
+	if cfg.PassiveResolveTime != "" {
+		next := nextPassiveResolveTime(time.Now(), cfg.PassiveResolveTime)
+		logger.Printf("next passive pass at %s", next.Format(time.RFC3339))
+		if !wait(ctx, time.Until(next)) {
+			return nil
+		}
+	}
 	for ctx.Err() == nil {
 		domains, err := load(cfg.PassiveDomainsFile)
 		if err != nil {
@@ -106,14 +120,26 @@ func runPassiveWith(ctx context.Context, cfg Config, load func(string) ([]string
 			}
 			logger.Printf("skipping passive pass: %v", err)
 		} else {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if err := cleanup(); err != nil {
+				return fmt.Errorf("clear passive output directory: %w", err)
+			}
 			logger.Printf("passive pass: %d domains, up to %d parallel resolves", len(domains), cfg.PassiveResolveParallel)
 			runPassiveBatch(ctx, domains, cfg, resolve)
-			if ctx.Err() == nil {
+			if ctx.Err() == nil && cfg.PassiveResolveTime == "" {
 				logger.Printf("passive pass complete; next pass in %s", cfg.PassiveResolveInterval)
 			}
 		}
 		firstPass = false
-		if !wait(ctx, cfg.PassiveResolveInterval) {
+		delay := cfg.PassiveResolveInterval
+		if cfg.PassiveResolveTime != "" {
+			next := nextPassiveResolveTime(time.Now(), cfg.PassiveResolveTime)
+			logger.Printf("next passive pass at %s", next.Format(time.RFC3339))
+			delay = time.Until(next)
+		}
+		if !wait(ctx, delay) {
 			break
 		}
 	}
@@ -149,6 +175,49 @@ dispatch:
 	}
 	close(jobs)
 	workers.Wait()
+}
+
+func nextPassiveResolveTime(now time.Time, clock string) time.Time {
+	t, _ := time.Parse("15:04", clock)
+	next := time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), 0, 0, now.Location())
+	if !next.After(now) {
+		next = time.Date(now.Year(), now.Month(), now.Day()+1, t.Hour(), t.Minute(), 0, 0, now.Location())
+	}
+	return next
+}
+
+func clearPassiveOutputDirectory(dir string) error {
+	hostsMu.Lock()
+	defer hostsMu.Unlock()
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s must be a real directory", dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	for _, seen := range []map[string]bool{writtenReachable, writtenReachableDomains, writtenReachableIPs, writtenUnreachableDomains, writtenUnreachableIPs} {
+		for key := range seen {
+			path, _, _ := strings.Cut(key, "\x00")
+			rel, err := filepath.Rel(dir, path)
+			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				delete(seen, key)
+			}
+		}
+	}
+	return nil
 }
 
 func waitPassiveInterval(ctx context.Context, interval time.Duration) bool {

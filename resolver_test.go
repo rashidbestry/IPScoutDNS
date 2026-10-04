@@ -23,7 +23,7 @@ func TestTLSProbeWritesRuntimeOutputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	cfg := Config{
+	cfg := Config{TCPProbe: true, TLSProbe: true, ICMPProbe: true,
 		Mode: "passive", DirectDNS: []string{"test"}, TLSRoute: "direct", TLSPort: port,
 		ReachableHostsFile:     filepath.Join(dir, "reachable.hosts"),
 		ReachableDomainsFile:   filepath.Join(dir, "reachable.domains"),
@@ -67,7 +67,7 @@ func TestDomainOutputReachability(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			cfg := Config{
+			cfg := Config{TCPProbe: true, TLSProbe: true, ICMPProbe: true,
 				DirectDNS:              []string{"resolver"},
 				HTTPProbe:              true,
 				ReachableHostsFile:     filepath.Join(dir, "reachable.hosts"),
@@ -157,7 +157,7 @@ func TestDomainReachabilityRetriesTransientTCPFailure(t *testing.T) {
 	previousConfig := currentConfig
 	t.Cleanup(func() { currentConfig = previousConfig })
 	dir := t.TempDir()
-	cfg := Config{
+	cfg := Config{TCPProbe: true, TLSProbe: true, ICMPProbe: true,
 		DirectDNS:              []string{"test"},
 		ReachableHostsFile:     filepath.Join(dir, "reachable.hosts"),
 		ReachableDomainsFile:   filepath.Join(dir, "reachable.domains"),
@@ -195,7 +195,7 @@ func TestNoCandidatesPreservesDomainStatus(t *testing.T) {
 	for _, status := range []string{"unknown", "reachable", "unreachable"} {
 		t.Run(status, func(t *testing.T) {
 			dir := t.TempDir()
-			cfg := Config{
+			cfg := Config{TCPProbe: true, TLSProbe: true, ICMPProbe: true,
 				DirectDNS:              []string{"test"},
 				ReachableDomainsFile:   filepath.Join(dir, "reachable.domains"),
 				UnreachableDomainsFile: filepath.Join(dir, "unreachable.domains"),
@@ -239,7 +239,7 @@ func TestInconclusiveChecksDoNotChangeDomainStatus(t *testing.T) {
 	previousConfig := currentConfig
 	t.Cleanup(func() { currentConfig = previousConfig })
 	dir := t.TempDir()
-	cfg := Config{
+	cfg := Config{TCPProbe: true, TLSProbe: true, ICMPProbe: true,
 		DirectDNS:              []string{"test"},
 		HTTPProbe:              true,
 		ReachableDomainsFile:   filepath.Join(dir, "reachable.domains"),
@@ -282,7 +282,7 @@ func TestICMPRespectsTCPRoute(t *testing.T) {
 		for _, route := range []string{"direct", "proxy"} {
 			t.Run(mode+"/"+route, func(t *testing.T) {
 				dir := t.TempDir()
-				cfg := Config{
+				cfg := Config{TCPProbe: true, TLSProbe: true, ICMPProbe: true,
 					Mode: mode, TLSRoute: route, DirectDNS: []string{"test"},
 					HTTPProbe: true, MaxParallelTests: 1,
 					ReachableIPsFile:       filepath.Join(dir, "reachable.ips"),
@@ -343,7 +343,7 @@ func TestHTTPProbeToggle(t *testing.T) {
 		for _, enabled := range []bool{true, false} {
 			t.Run(mode+"/http="+strconv.FormatBool(enabled), func(t *testing.T) {
 				dir := t.TempDir()
-				cfg := Config{
+				cfg := Config{TCPProbe: true, TLSProbe: true, ICMPProbe: true,
 					Mode: mode, DirectDNS: []string{"test"}, HTTPProbe: enabled,
 					ReachableDomainsFile:   filepath.Join(dir, "reachable.domains"),
 					UnreachableDomainsFile: filepath.Join(dir, "unreachable.domains"),

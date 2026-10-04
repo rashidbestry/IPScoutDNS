@@ -196,7 +196,7 @@ func TestPassiveBatchParallelLimit(t *testing.T) {
 
 func TestPassiveScheduleReloadsAfterCompletedPass(t *testing.T) {
 	ctx := context.Background()
-	cfg := Config{PassiveDomainsFile: "list", PassiveResolveParallel: 1, PassiveResolveInterval: 24 * time.Hour}
+	cfg := Config{TCPProbe: true, TLSProbe: true, ICMPProbe: true, PassiveDomainsFile: "list", PassiveResolveParallel: 1, PassiveResolveInterval: 24 * time.Hour}
 	loads, waits := 0, 0
 	var resolved []string
 	err := runPassiveWith(ctx, cfg, func(string) ([]string, error) {
@@ -220,7 +220,7 @@ func TestPassiveScheduleReloadsAfterCompletedPass(t *testing.T) {
 }
 
 func TestPassiveListReadFailures(t *testing.T) {
-	cfg := Config{PassiveDomainsFile: "list", PassiveResolveParallel: 1, PassiveResolveInterval: time.Hour}
+	cfg := Config{TCPProbe: true, TLSProbe: true, ICMPProbe: true, PassiveDomainsFile: "list", PassiveResolveParallel: 1, PassiveResolveInterval: time.Hour}
 	loadError := fmt.Errorf("invalid list")
 	if err := runPassiveWith(context.Background(), cfg, func(string) ([]string, error) {
 		return nil, loadError
@@ -299,7 +299,7 @@ func TestPassiveResolvesFreshAndPreservesStatusOnLookupFailure(t *testing.T) {
 	})
 	updateCache(domain, "1.1.1.1")
 	t.Cleanup(func() { deleteCache(domain) })
-	cfg := Config{Mode: "passive", CacheTTL: 24 * time.Hour, DirectDNS: []string{"1.1.1.1"}, DNSTimeout: time.Second, MaxParallelTests: 1}
+	cfg := Config{TCPProbe: true, TLSProbe: true, ICMPProbe: true, Mode: "passive", CacheTTL: 24 * time.Hour, DirectDNS: []string{"1.1.1.1"}, DNSTimeout: time.Second, MaxParallelTests: 1}
 	queries := 0
 	query := func(context.Context, string, string, bool, Config) []string {
 		queries++

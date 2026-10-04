@@ -36,6 +36,7 @@ type Config struct {
 	Mode                   string
 	ActiveDomainsFile      string
 	PassiveDomainsFile     string
+	PassiveResolveTime     string
 	PassiveResolveInterval time.Duration
 	PassiveResolveParallel int
 	DirectDNS              []string
@@ -54,6 +55,9 @@ type Config struct {
 	TLSTimeout             time.Duration
 	TLSPort                int
 	TLSRoute               string
+	TCPProbe               bool
+	TLSProbe               bool
+	ICMPProbe              bool
 	HTTPProbe              bool
 	MaxParallelTests       int
 	LogsEnabled            bool
@@ -240,6 +244,9 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 		TLSTimeout:             defaultTLSTimeout,
 		TLSPort:                defaultTLSPort,
 		TLSRoute:               defaultTLSRoute,
+		TCPProbe:               true,
+		TLSProbe:               true,
+		ICMPProbe:              true,
 		HTTPProbe:              true,
 		MaxParallelTests:       defaultMaxParallel,
 		LogsEnabled:            true,
@@ -320,6 +327,14 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 				cfg.ActiveDomainsFile = value
 			case "passive_domains_file":
 				cfg.PassiveDomainsFile = value
+			case "passive_resolve_time":
+				if value != "" {
+					t, err := time.Parse("15:04", value)
+					if err != nil || t.Format("15:04") != value {
+						return cfg, fmt.Errorf("%s:%d: invalid passive_resolve_time %q; expected HH:MM", path, lineNo, value)
+					}
+				}
+				cfg.PassiveResolveTime = value
 			case "passive_resolve_interval":
 				d, err := time.ParseDuration(value)
 				if err != nil || d <= 0 {
@@ -412,12 +427,21 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 					return cfg, fmt.Errorf("%s:%d: invalid tcp timeout %q", path, lineNo, value)
 				}
 				cfg.TLSTimeout = d
-			case "http_probe":
+			case "tcp_probe", "tls_probe", "http_probe", "icmp_probe":
 				enabled, err := strconv.ParseBool(value)
 				if err != nil {
-					return cfg, fmt.Errorf("%s:%d: invalid http_probe value %q", path, lineNo, value)
+					return cfg, fmt.Errorf("%s:%d: invalid %s value %q", path, lineNo, key, value)
 				}
-				cfg.HTTPProbe = enabled
+				switch key {
+				case "tcp_probe":
+					cfg.TCPProbe = enabled
+				case "tls_probe":
+					cfg.TLSProbe = enabled
+				case "http_probe":
+					cfg.HTTPProbe = enabled
+				case "icmp_probe":
+					cfg.ICMPProbe = enabled
+				}
 			case "tcp_port", "tls_port":
 				v, err := strconv.Atoi(value)
 				if err != nil || v <= 0 || v > 65535 {

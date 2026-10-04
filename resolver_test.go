@@ -119,7 +119,7 @@ func TestDomainOutputReachability(t *testing.T) {
 					if httpCalls != wantHTTPCalls {
 						t.Fatalf("HTTP checks = %d, want %d", httpCalls, wantHTTPCalls)
 					}
-					hostRecorded = hostRecorded || step.selected
+					hostRecorded = hostRecorded || step.selected || (step.http.tcpReachable && step.http.httpReady)
 					hosts, err := os.ReadFile(cfg.ReachableHostsFile)
 					if err != nil && !os.IsNotExist(err) {
 						t.Fatal(err)
@@ -388,8 +388,16 @@ func TestHTTPProbeToggle(t *testing.T) {
 						t.Fatalf("%s = %q, want %q", path, contents, want)
 					}
 				}
-				if _, err := os.Stat(cfg.ReachableHostsFile); !os.IsNotExist(err) {
-					t.Fatalf("HTTP-only result created hosts output: %v", err)
+				hosts, err := os.ReadFile(cfg.ReachableHostsFile)
+				if err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+				wantHosts := ""
+				if enabled {
+					wantHosts = "192.0.2.1 example.com\n"
+				}
+				if string(hosts) != wantHosts {
+					t.Fatalf("hosts = %q, want %q", hosts, wantHosts)
 				}
 			})
 		}

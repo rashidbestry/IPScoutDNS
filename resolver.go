@@ -260,11 +260,13 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 
 	selectedIP := ""
 	for _, ip := range ips {
-		if candidateProbePassed(cfg, tlsResults[ip], httpResults[ip], icmpResults[ip]) {
+		selected := candidateProbePassed(cfg, tlsResults[ip], httpResults[ip], icmpResults[ip])
+		// HTTP validates a host mapping even when TLS is required for DNS selection.
+		if selected || (cfg.HTTPProbe && httpResults[ip].tcpReachable && httpResults[ip].httpReady) {
 			recordReachableHost(domain, ip)
-			if selectedIP == "" {
-				selectedIP = ip
-			}
+		}
+		if selected && selectedIP == "" {
+			selectedIP = ip
 		}
 	}
 	if selectedIP == "" {

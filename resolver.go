@@ -27,6 +27,10 @@ func isDomainAllowed(domain string) bool {
 }
 
 func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
+	handleDNSWith(w, req, resolveAndSelectStatus)
+}
+
+func handleDNSWith(w dns.ResponseWriter, req *dns.Msg, resolve func(string, Config) (string, bool, bool)) {
 	if len(req.Question) == 0 {
 		dns.HandleFailed(w, req)
 		return
@@ -59,16 +63,13 @@ func handleDNS(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	ip, ok, cacheHit := resolveAndSelectStatus(domain, currentConfig)
+	ip, ok, _ := resolve(domain, currentConfig)
 	f.ip = ip
 	f.ok = ok
 	close(f.done)
 	removeFlight(domain, f)
 
 	if ok {
-		if !cacheHit {
-			logger.Printf("%s: WORKING IP = %s", domain, ip)
-		}
 		replyIP(w, req, ip)
 		return
 	}
@@ -129,7 +130,7 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		if entry, ok := getCache(domain); ok {
 			if time.Since(entry.Checked) < cfg.CacheTTL {
 				if cachedIP, valid := normalizeIPv4Candidate(entry.IP); valid {
-					logger.Printf("%s: CACHE HIT = %s", domain, cachedIP)
+					logger.Printf("%s: CACHE HIT = %s [%s]", domain, cachedIP, entry.Protocol)
 					recordReachableHost(domain, cachedIP)
 					return cachedIP, true, true
 				}
@@ -258,36 +259,53 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		recordDomainUnreachable(domain)
 	}
 
-	selectedIP := ""
+	selectedIP, selectedProtocol := "", ""
 	for _, ip := range ips {
-		selected := candidateProbePassed(cfg, tlsResults[ip], httpResults[ip], icmpResults[ip])
-		// HTTP validates a host mapping even when TLS is required for DNS selection.
-		if selected || (cfg.HTTPProbe && httpResults[ip].tcpReachable && httpResults[ip].httpReady) {
+		protocol := candidateProbeProtocol(cfg, tlsResults[ip], httpResults[ip], icmpResults[ip])
+		if protocol != "" {
 			recordReachableHost(domain, ip)
 		}
-		if selected && selectedIP == "" {
+		// HTTP is only probed when no candidate passes TLS, so TLS always wins.
+		if protocol != "" && selectedIP == "" {
 			selectedIP = ip
+			selectedProtocol = protocol
 		}
 	}
 	if selectedIP == "" {
 		deleteCache(domain)
-	} else if cfg.Mode != "passive" {
-		updateCache(domain, selectedIP)
+	} else {
+		if cfg.Mode != "passive" {
+			updateCache(domain, selectedIP, selectedProtocol)
+		}
+		logger.Printf("%s: WORKING IP = %s [%s]", domain, selectedIP, selectedProtocol)
 	}
 	return selectedIP, selectedIP != "", false
 }
 
 func candidateProbePassed(cfg Config, tls tlsProbeResult, http httpProbeResult, icmp bool) bool {
-	if cfg.TLSProbe {
-		return tls.tcpReachable && tls.tlsReady
+	return candidateProbeProtocol(cfg, tls, http, icmp) != ""
+}
+
+func candidateProbeProtocol(cfg Config, tls tlsProbeResult, http httpProbeResult, icmp bool) string {
+	if cfg.TLSProbe && tls.tcpReachable && tls.tlsReady {
+		return "TLS"
 	}
-	if cfg.HTTPProbe {
-		return http.tcpReachable && http.httpReady
+	if cfg.HTTPProbe && http.tcpReachable && http.httpReady {
+		return "HTTP"
+	}
+	if cfg.TLSProbe || cfg.HTTPProbe {
+		return ""
 	}
 	if cfg.TCPProbe {
-		return tls.tcpReachable
+		if tls.tcpReachable {
+			return "TCP"
+		}
+		return ""
 	}
-	return cfg.ICMPProbe && cfg.TLSRoute != "proxy" && icmp
+	if cfg.ICMPProbe && cfg.TLSRoute != "proxy" && icmp {
+		return "ICMP"
+	}
+	return ""
 }
 
 func collectResolverIPs(domain string, cfg Config, query resolverQueryFunc) []string {

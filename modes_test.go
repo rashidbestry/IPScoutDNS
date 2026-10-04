@@ -297,7 +297,7 @@ func TestPassiveResolvesFreshAndPreservesStatusOnLookupFailure(t *testing.T) {
 		defer hostsMu.Unlock()
 		delete(writtenReachable, "8.8.8.8 "+domain)
 	})
-	updateCache(domain, "1.1.1.1")
+	updateCache(domain, "1.1.1.1", "TLS")
 	t.Cleanup(func() { deleteCache(domain) })
 	cfg := Config{TCPProbe: true, TLSProbe: true, ICMPProbe: true, Mode: "passive", CacheTTL: 24 * time.Hour, DirectDNS: []string{"1.1.1.1"}, DNSTimeout: time.Second, MaxParallelTests: 1}
 	queries := 0

@@ -6,8 +6,9 @@ import (
 )
 
 type CacheEntry struct {
-	IP      string
-	Checked time.Time
+	IP       string
+	Protocol string
+	Checked  time.Time
 }
 
 type flight struct {
@@ -32,11 +33,11 @@ func getCache(domain string) (CacheEntry, bool) {
 	return entry, ok
 }
 
-func updateCache(domain string, ip string) {
+func updateCache(domain string, ip string, protocol string) {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 
-	cache[domain] = CacheEntry{IP: ip, Checked: time.Now()}
+	cache[domain] = CacheEntry{IP: ip, Protocol: protocol, Checked: time.Now()}
 }
 
 func deleteCache(domain string) {

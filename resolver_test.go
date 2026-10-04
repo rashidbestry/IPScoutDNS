@@ -95,7 +95,7 @@ func TestDomainOutputReachability(t *testing.T) {
 				{"service failure is immediately unreachable", tlsProbeResult{}, httpProbeResult{}, false, false, false, true},
 				{"TCP alone is insufficient", tlsProbeResult{tcpReachable: true}, httpProbeResult{}, false, false, false, true},
 				{"only ICMP success does not validate domain", tlsProbeResult{}, httpProbeResult{}, true, false, false, true},
-				{"HTTP succeeds without TLS", tlsProbeResult{}, httpProbeResult{tcpReachable: true, httpReady: true}, false, false, true, false},
+				{"HTTP succeeds without TLS", tlsProbeResult{}, httpProbeResult{tcpReachable: true, httpReady: true}, false, true, true, false},
 				{"TLS succeeds", tlsProbeResult{tcpReachable: true, tlsReady: true}, httpProbeResult{}, false, true, true, false},
 				{"failure immediately replaces reachable status", tlsProbeResult{}, httpProbeResult{}, false, false, false, true},
 			} {
@@ -113,7 +113,7 @@ func TestDomainOutputReachability(t *testing.T) {
 						}
 					}
 					wantHTTPCalls := 1
-					if step.selected {
+					if step.probe.tcpReachable && step.probe.tlsReady {
 						wantHTTPCalls = 0
 					}
 					if httpCalls != wantHTTPCalls {
@@ -363,9 +363,9 @@ func TestHTTPProbeToggle(t *testing.T) {
 				if mode == "passive" {
 					resolvePassiveDomainWithProbes(context.Background(), "example.com", cfg, query, tlsCheck, httpCheck, pingCheck)
 				} else {
-					_, ok, _ := resolveAndSelectWithProbes(context.Background(), "example.com", cfg, query, tlsCheck, httpCheck, pingCheck)
-					if ok {
-						t.Error("HTTP-only candidate selected for TLS DNS answer")
+					ip, ok, _ := resolveAndSelectWithProbes(context.Background(), "example.com", cfg, query, tlsCheck, httpCheck, pingCheck)
+					if ok != enabled || (ok && ip != "192.0.2.1") {
+						t.Errorf("selected = %q, ok = %v, HTTP enabled = %v", ip, ok, enabled)
 					}
 				}
 				wantCalls := 0

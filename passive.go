@@ -90,9 +90,15 @@ func resolvePassiveDomainWithProbes(ctx context.Context, domain string, cfg Conf
 }
 
 func runPassive(ctx context.Context, cfg Config) error {
-	return runPassiveWithOutputs(ctx, cfg, loadPassiveDomainsFile, resolvePassiveDomain, waitPassiveInterval, func() error {
-		return clearPassiveOutputDirectory(outputSourceDirectory)
-	}, copyRuntimeOutputs)
+	return runPassiveWithLogs(ctx, cfg, loadPassiveDomainsFile, resolvePassiveDomain, waitPassiveInterval, func() error {
+		if cfg.outputDirectoryShared {
+			return clearPassiveOutputFiles(cfg.outputFiles())
+		}
+		return clearPassiveOutputDirectory(cfg.outputDirectory)
+	}, func(ctx context.Context) error { return copyRuntimeOutputs(ctx, cfg, outputDestinationDirectory) },
+		func(ctx context.Context) error {
+			return copyRuntimeLog(ctx, cfg, filepath.Join(outputDestinationDirectory, "logs"))
+		})
 }
 
 // Passes never overlap. The interval starts when a complete pass finishes.
@@ -106,6 +112,10 @@ func runPassiveWithCleanup(ctx context.Context, cfg Config, load func(string) ([
 }
 
 func runPassiveWithOutputs(ctx context.Context, cfg Config, load func(string) ([]string, error), resolve passiveResolveFunc, wait func(context.Context, time.Duration) bool, cleanup func() error, copyOutputs func(context.Context) error) error {
+	return runPassiveWithLogs(ctx, cfg, load, resolve, wait, cleanup, copyOutputs, func(context.Context) error { return nil })
+}
+
+func runPassiveWithLogs(ctx context.Context, cfg Config, load func(string) ([]string, error), resolve passiveResolveFunc, wait func(context.Context, time.Duration) bool, cleanup func() error, copyOutputs func(context.Context) error, copyLog func(context.Context) error) error {
 	firstPass := true
 	if cfg.PassiveResolveTime != "" {
 		next := nextPassiveResolveTime(time.Now(), cfg.PassiveResolveTime)
@@ -115,6 +125,7 @@ func runPassiveWithOutputs(ctx context.Context, cfg Config, load func(string) ([
 		}
 	}
 	for ctx.Err() == nil {
+		completedPass := false
 		domains, err := load(cfg.PassiveDomainsFile)
 		if err != nil {
 			if firstPass {
@@ -139,6 +150,7 @@ func runPassiveWithOutputs(ctx context.Context, cfg Config, load func(string) ([
 			if ctx.Err() == nil && cfg.PassiveResolveTime == "" {
 				logger.Printf("passive pass complete; next pass in %s", cfg.PassiveResolveInterval)
 			}
+			completedPass = ctx.Err() == nil
 		}
 		firstPass = false
 		delay := cfg.PassiveResolveInterval
@@ -146,6 +158,11 @@ func runPassiveWithOutputs(ctx context.Context, cfg Config, load func(string) ([
 			next := nextPassiveResolveTime(time.Now(), cfg.PassiveResolveTime)
 			logger.Printf("next passive pass at %s", next.Format(time.RFC3339))
 			delay = time.Until(next)
+		}
+		if completedPass {
+			if err := copyLog(ctx); err != nil && ctx.Err() == nil {
+				logger.Printf("failed to copy passive log: %v", err)
+			}
 		}
 		if !wait(ctx, delay) {
 			break
@@ -194,6 +211,39 @@ func nextPassiveResolveTime(now time.Time, clock string) time.Time {
 	return next
 }
 
+// A shared executable directory must only lose configured output files.
+func clearPassiveOutputFiles(paths []string) error {
+	hostsMu.Lock()
+	defer hostsMu.Unlock()
+	for _, path := range paths {
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("output %s must be a regular file", path)
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	for _, seen := range []map[string]bool{writtenReachable, writtenReachableDomains, writtenReachableIPs, writtenUnreachableDomains, writtenUnreachableIPs} {
+		for key := range seen {
+			path, _, _ := strings.Cut(key, "\x00")
+			for _, output := range paths {
+				if path == output {
+					delete(seen, key)
+					break
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func clearPassiveOutputDirectory(dir string) error {
 	hostsMu.Lock()
 	defer hostsMu.Unlock()
@@ -212,6 +262,9 @@ func clearPassiveOutputDirectory(dir string) error {
 		return err
 	}
 	for _, entry := range entries {
+		if entry.Type().IsRegular() && isSavedLogName(entry.Name()) {
+			continue
+		}
 		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
 			return err
 		}

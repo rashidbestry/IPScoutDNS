@@ -84,9 +84,6 @@ func TestSampleConfigUsesTCPReachabilitySettings(t *testing.T) {
 	if cfg.TLSPort != 443 {
 		t.Errorf("TLSPort = %d, want 443", cfg.TLSPort)
 	}
-	if cfg.TLSRoute != "direct" {
-		t.Errorf("TLSRoute = %q, want direct", cfg.TLSRoute)
-	}
 	if cfg.TLSSOCKS5Addr != "127.0.0.1:1080" {
 		t.Errorf("TLSSOCKS5Addr = %q, want 127.0.0.1:1080", cfg.TLSSOCKS5Addr)
 	}

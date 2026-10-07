@@ -32,6 +32,9 @@ const (
 	defaultPassiveResolveInterval = 24 * time.Hour
 	defaultPassiveResolveParallel = 16
 	defaultActiveCopyInterval     = time.Hour
+	defaultActiveLogCopyInterval  = time.Hour
+	defaultLogMaxSize             = int64(10 * 1000 * 1000)
+	defaultLogKeepFiles           = 7
 )
 
 type Config struct {
@@ -42,6 +45,7 @@ type Config struct {
 	PassiveResolveInterval time.Duration
 	PassiveResolveParallel int
 	ActiveCopyInterval     time.Duration
+	ActiveLogCopyInterval  time.Duration
 	DirectDNS              []string
 	ProxyDNS               []string
 	ListenAddr             string
@@ -65,12 +69,18 @@ type Config struct {
 	MaxParallelTests       int
 	HostsMaxIPsPerDomain   int
 	LogsEnabled            bool
+	SaveLogs               bool
+	LogMaxSize             int64
+	LogKeepFiles           int
 	AnswerTTL              uint32
 	ReachableHostsFile     string
 	ReachableDomainsFile   string
 	ReachableIPsFile       string
 	UnreachableDomainsFile string
 	UnreachableIPsFile     string
+	outputDirectory        string // selected at startup, independent of the working directory
+	outputDirectoryShared  bool   // Windows stores outputs beside the executable
+	savedLog               *savedLog
 }
 
 func (c Config) validate() error {
@@ -84,7 +94,13 @@ func (c Config) validateWithInterfaceValidator(validateInterface func(string) er
 	if len(c.DirectDNS) == 0 && len(c.ProxyDNS) == 0 {
 		return fmt.Errorf("at least one upstream resolver is required: direct_dns or proxy_dns")
 	}
+	if c.SaveLogs && (c.LogMaxSize <= 0 || c.LogKeepFiles <= 0) {
+		return fmt.Errorf("log_max_size and log_keep_files must be greater than zero")
+	}
 	if c.Mode == "active" {
+		if c.SaveLogs && c.ActiveLogCopyInterval <= 0 {
+			return fmt.Errorf("active_log_copy_interval must be greater than zero")
+		}
 		if c.ActiveCopyInterval <= 0 {
 			return fmt.Errorf("active_copy_interval must be greater than zero")
 		}
@@ -245,6 +261,9 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 		PassiveResolveInterval: defaultPassiveResolveInterval,
 		PassiveResolveParallel: defaultPassiveResolveParallel,
 		ActiveCopyInterval:     defaultActiveCopyInterval,
+		ActiveLogCopyInterval:  defaultActiveLogCopyInterval,
+		LogMaxSize:             defaultLogMaxSize,
+		LogKeepFiles:           defaultLogKeepFiles,
 		ListenAddr:             defaultListenAddr,
 		FallbackDNS:            defaultFallbackDNS,
 		SOCKS5Addr:             defaultSOCKS5Addr,
@@ -359,6 +378,12 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 					return cfg, fmt.Errorf("%s:%d: invalid active_copy_interval %q", path, lineNo, value)
 				}
 				cfg.ActiveCopyInterval = d
+			case "active_log_copy_interval":
+				d, err := time.ParseDuration(value)
+				if err != nil || d <= 0 {
+					return cfg, fmt.Errorf("%s:%d: invalid active_log_copy_interval %q", path, lineNo, value)
+				}
+				cfg.ActiveLogCopyInterval = d
 			case "passive_resolve_parallel":
 				v, err := strconv.Atoi(value)
 				if err != nil || v <= 0 {
@@ -373,6 +398,24 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 					return cfg, fmt.Errorf("%s:%d: invalid logs_enabled value %q", path, lineNo, value)
 				}
 				cfg.LogsEnabled = enabled
+			case "save_logs":
+				enabled, err := strconv.ParseBool(value)
+				if err != nil {
+					return cfg, fmt.Errorf("%s:%d: invalid save_logs value %q", path, lineNo, value)
+				}
+				cfg.SaveLogs = enabled
+			case "log_max_size":
+				size, err := parseLogMaxSize(value)
+				if err != nil {
+					return cfg, fmt.Errorf("%s:%d: invalid log_max_size %q: %w", path, lineNo, value, err)
+				}
+				cfg.LogMaxSize = size
+			case "log_keep_files":
+				count, err := strconv.Atoi(value)
+				if err != nil || count <= 0 {
+					return cfg, fmt.Errorf("%s:%d: invalid log_keep_files %q", path, lineNo, value)
+				}
+				cfg.LogKeepFiles = count
 			case "ttl":
 				d, err := time.ParseDuration(value)
 				if err != nil || d <= 0 {

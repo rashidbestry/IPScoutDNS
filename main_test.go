@@ -20,7 +20,7 @@ func TestPassiveOutputLogIndentation(t *testing.T) {
 	})
 	l.Printf("passive pass: %d domains, up to %d parallel resolves", 1, 16)
 	l.Printf("example.com: WORKING IP = %s [%s]", "1.1.1.1", "TLS")
-	l.Printf("copied %d output files from %s to %s", 3, outputSourceDirectory, outputDestinationDirectory)
+	l.Printf("copied %d output files from %s to %s", 3, openWrtOutputDirectory, outputDestinationDirectory)
 	l.Printf("passive pass complete; next pass in 24h0m0s")
 	header := regexp.MustCompile(`^\[ipscoutdns\] \d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} `)
 	want := []string{

@@ -9,9 +9,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -84,6 +86,17 @@ func main() {
 	if err != nil {
 		logger.Fatalf("configuration error: %v", err)
 	}
+	if err := prepareRuntimeOutputs(&cfg, cfgPath); err != nil {
+		logger.Fatalf("output configuration error: %v", err)
+	}
+	cfg.savedLog, err = openSavedLog(cfg, time.Now())
+	if err != nil {
+		logger.Fatalf("log file error: %v", err)
+	}
+	if cfg.savedLog != nil {
+		defer cfg.savedLog.Close()
+	}
+	logger.SetOutput(loggingOutput(os.Stdout, true, cfg.savedLog))
 
 	currentConfig = cfg
 	if cfg.Mode == "active" {
@@ -129,10 +142,10 @@ func main() {
 	} else if cfg.TLSRoute == "proxy" {
 		logger.Printf("\t- TCP/TLS/HTTP SOCKS5 proxy: %s", cfg.TLSSOCKS5Addr)
 	}
-	logger.Printf("\t- TCP/TLS/HTTP/ICMP timeout: %s", cfg.TLSTimeout)
+	logger.Printf("\t- TCP/TLS/HTTP timeout: %s", cfg.TLSTimeout)
 
 	if !cfg.LogsEnabled {
-		logger.SetOutput(io.Discard)
+		logger.SetOutput(loggingOutput(os.Stdout, false, cfg.savedLog))
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -155,21 +168,38 @@ func main() {
 func logOtherConfigs(cfg Config) {
 	var modeSettings string
 	if cfg.Mode == "active" {
-		modeSettings = fmt.Sprintf("ttl=%s answer_ttl=%d active_copy_interval=%s", cfg.CacheTTL, cfg.AnswerTTL, cfg.ActiveCopyInterval)
+		modeSettings = fmt.Sprintf("ttl=%s answer_ttl=%d active_copy_interval=%s active_log_copy_interval=%s", cfg.CacheTTL, cfg.AnswerTTL, cfg.ActiveCopyInterval, cfg.ActiveLogCopyInterval)
 	} else {
 		modeSettings = fmt.Sprintf("passive_resolve_time=%q passive_resolve_interval=%s passive_resolve_parallel=%d", cfg.PassiveResolveTime, cfg.PassiveResolveInterval, cfg.PassiveResolveParallel)
 	}
-	logger.Printf("\t- Other configs: %s logs_enabled=%t parallel_tests=%d hosts_max_ips_per_domain=%d reachable_hosts=%q reachable_domains_file=%q reachable_ips_file=%q unreachable_domains_file=%q unreachable_ips_file=%q",
-		modeSettings, cfg.LogsEnabled, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain,
+	logger.Printf("\t- Other configs: %s logs_enabled=%t save_logs=%t log_max_size=%dB log_keep_files=%d parallel_tests=%d hosts_max_ips_per_domain=%d reachable_hosts=%q reachable_domains_file=%q reachable_ips_file=%q unreachable_domains_file=%q unreachable_ips_file=%q",
+		modeSettings, cfg.LogsEnabled, cfg.SaveLogs, cfg.LogMaxSize, cfg.LogKeepFiles, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain,
 		cfg.ReachableHostsFile, cfg.ReachableDomainsFile, cfg.ReachableIPsFile, cfg.UnreachableDomainsFile, cfg.UnreachableIPsFile)
 }
 
 func runActive(ctx context.Context, cfg Config) {
+	logCopiesDone := make(chan struct{})
+	if !cfg.SaveLogs || cfg.outputDirectoryShared || cfg.savedLog == nil {
+		close(logCopiesDone)
+	} else {
+		go func() {
+			defer close(logCopiesDone)
+			runActiveLogCopies(ctx, cfg.ActiveLogCopyInterval, func(ctx context.Context) error {
+				return copyRuntimeLog(ctx, cfg, filepath.Join(outputDestinationDirectory, "logs"))
+			}, waitPassiveInterval)
+		}()
+	}
 	copiesDone := make(chan struct{})
-	go func() {
-		defer close(copiesDone)
-		runActiveOutputCopies(ctx, cfg.ActiveCopyInterval, copyRuntimeOutputs, waitPassiveInterval)
-	}()
+	if cfg.outputDirectoryShared {
+		close(copiesDone)
+	} else {
+		go func() {
+			defer close(copiesDone)
+			runActiveOutputCopies(ctx, cfg.ActiveCopyInterval, func(ctx context.Context) error {
+				return copyRuntimeOutputs(ctx, cfg, outputDestinationDirectory)
+			}, waitPassiveInterval)
+		}()
+	}
 	handler := dns.HandlerFunc(handleDNS)
 	udpServer := &dns.Server{Addr: cfg.ListenAddr, Net: "udp", Handler: handler}
 	tcpServer := &dns.Server{Addr: cfg.ListenAddr, Net: "tcp", Handler: handler}
@@ -198,6 +228,7 @@ func runActive(ctx context.Context, cfg Config) {
 		logger.Printf("TCP shutdown error: %v", err)
 	}
 	<-copiesDone
+	<-logCopiesDone
 }
 
 func configuredOrDefault(value string) string {

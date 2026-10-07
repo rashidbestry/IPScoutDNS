@@ -5,11 +5,172 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestRuntimeOutputDirectory(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "tool", "ipscoutdns.exe")
+	for _, test := range []struct {
+		name, goos, release, osRelease, want string
+	}{
+		{"OpenWrt release", "linux", "DISTRIB_ID='OpenWrt'", "", openWrtOutputDirectory},
+		{"OpenWrt OS ID", "linux", "", "ID=\"openwrt\"\n", openWrtOutputDirectory},
+		{"OpenWrt derivative", "linux", "", "ID=router\nID_LIKE='linux openwrt'\n", openWrtOutputDirectory},
+		{"Linux", "linux", "", "ID=ubuntu\nID_LIKE=debian\n", linuxOutputDirectory},
+		{"Linux without release files", "linux", "", "", linuxOutputDirectory},
+		{"unrelated release name", "linux", "", "NAME=OpenWrt\nID=debian\n", linuxOutputDirectory},
+		{"Windows executable directory", "windows", "", "", filepath.Dir(executable)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			readFile := func(path string) ([]byte, error) {
+				if path == "/etc/openwrt_release" && test.release != "" {
+					return []byte(test.release), nil
+				}
+				if path == "/etc/os-release" && test.osRelease != "" {
+					return []byte(test.osRelease), nil
+				}
+				return nil, os.ErrNotExist
+			}
+			got, err := runtimeOutputDirectoryWith(test.goos, readFile, func() (string, error) { return executable, nil })
+			if err != nil || got != test.want {
+				t.Fatalf("directory = %q, error = %v, want %q", got, err, test.want)
+			}
+		})
+	}
+	_, err := runtimeOutputDirectoryWith("windows", nil, func() (string, error) { return "", errors.New("unavailable") })
+	if err == nil {
+		t.Fatal("executable lookup failure was ignored")
+	}
+}
+
+func TestRuntimeOutputFilesBothModes(t *testing.T) {
+	previousConfig := currentConfig
+	t.Cleanup(func() { currentConfig = previousConfig })
+	for _, mode := range []string{"active", "passive"} {
+		for _, platform := range []string{"OpenWrt", "Linux", "Windows"} {
+			t.Run(mode+"/"+platform, func(t *testing.T) {
+				cfg, err := loadConfig(writeModeTestFile(t, "mode="+mode+"\nactive_domains_file=active.txt\npassive_domains_file=passive.txt\ndirect_dns=1.1.1.1\nreachable_hosts=old/custom.hosts\nreachable_domains=reachable.domains\nreachable_ips=reachable.ips\nunreachable_domains=unreachable.domains\nunreachable_ips=unreachable.ips\n"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				dir := filepath.Join(t.TempDir(), "outputs")
+				if err := configureOutputPaths(&cfg, dir, platform == "Windows"); err != nil {
+					t.Fatal(err)
+				}
+				currentConfig = cfg
+				recordReachableHost("example.com", "1.1.1.1")
+				recordDomainUnreachable("failed.example")
+				recordUnreachableIP("192.0.2.1")
+				files, err := readOutputSnapshot(context.Background(), cfg.outputDirectory, nil)
+				if err != nil || len(files) != 5 || string(files["custom.hosts"]) != "1.1.1.1 example.com\n" {
+					t.Fatalf("outputs = %q, error = %v", files, err)
+				}
+				for _, path := range cfg.outputFiles() {
+					if filepath.Dir(path) != dir {
+						t.Fatalf("output %q is outside %q", path, dir)
+					}
+				}
+				destination := t.TempDir()
+				if err := copyRuntimeOutputs(context.Background(), cfg, destination); err != nil {
+					t.Fatal(err)
+				}
+				copies, err := readOutputSnapshot(context.Background(), destination, nil)
+				if platform == "Windows" {
+					if err != nil || len(copies) != 0 {
+						t.Fatalf("Windows outputs were copied: %q, error = %v", copies, err)
+					}
+					return
+				}
+				if err != nil || len(copies) != len(files) || string(copies["custom.hosts"]) != string(files["custom.hosts"]) {
+					t.Fatalf("copies = %q, error = %v", copies, err)
+				}
+			})
+		}
+	}
+}
+
+func TestOutputPathsDisabledAndInvalid(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{ReachableIPsFile: filepath.Join("old", "reachable.ips")}
+	if err := configureOutputPaths(&cfg, dir, true); err != nil || cfg.ReachableIPsFile != filepath.Join(dir, "reachable.ips") || len(cfg.outputFiles()) != 1 {
+		t.Fatalf("configured outputs = %v, error = %v", cfg.outputFiles(), err)
+	}
+	for _, cfg := range []Config{
+		{ReachableIPsFile: "."},
+		{ReachableIPsFile: ".."},
+		{ReachableIPsFile: "old/same.ips", UnreachableIPsFile: "other/SAME.ips"},
+	} {
+		if err := configureOutputPaths(&cfg, dir, true); err == nil {
+			t.Fatal("invalid or duplicate filename accepted")
+		}
+	}
+	blocked := filepath.Join(dir, "blocked")
+	if err := os.WriteFile(blocked, []byte("file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := configureOutputPaths(&cfg, filepath.Join(blocked, "outputs"), false); err == nil {
+		t.Fatal("output directory creation failure was ignored")
+	}
+}
+
+func TestWindowsOutputsPreserveToolFiles(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(t.TempDir(), "must-not-create")
+	cfg := Config{ReachableIPsFile: "reachable.ips"}
+	if err := configureOutputPaths(&cfg, dir, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ipscoutdns.exe", "ipscoutdns.conf", "passive-domains.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("keep"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendUniqueLine(cfg.ReachableIPsFile, "1.1.1.1", writtenReachableIPs)
+	if err := clearPassiveOutputFiles(cfg.outputFiles()); err != nil {
+		t.Fatal(err)
+	}
+	appendUniqueLine(cfg.ReachableIPsFile, "1.1.1.1", writtenReachableIPs)
+	if err := copyRuntimeOutputs(context.Background(), cfg, destination); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ipscoutdns.exe", "ipscoutdns.conf", "passive-domains.txt"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(data) != "keep" {
+			t.Fatalf("tool file %s changed: %q, error = %v", name, data, err)
+		}
+		if _, err := os.Stat(filepath.Join(destination, name)); !os.IsNotExist(err) {
+			t.Fatalf("tool file %s was copied", name)
+		}
+	}
+	data, err := os.ReadFile(cfg.ReachableIPsFile)
+	if err != nil || string(data) != "1.1.1.1\n" {
+		t.Fatalf("output after cleanup = %q, error = %v", data, err)
+	}
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		t.Fatalf("Windows copy created a destination: %v", err)
+	}
+	if err := clearPassiveOutputFiles([]string{dir}); err == nil {
+		t.Fatal("cleanup accepted a directory as an output file")
+	}
+}
+
+func TestRuntimeOutputRejectsExecutableOverwrite(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows outputs share the executable directory")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{ReachableHostsFile: filepath.Base(executable)}
+	if err := prepareRuntimeOutputs(&cfg, ""); err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("executable overwrite protection: %v", err)
+	}
+}
 
 func TestActiveCopyIntervalConfig(t *testing.T) {
 	for _, test := range []struct {

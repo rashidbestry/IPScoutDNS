@@ -20,6 +20,28 @@ var logger = log.New(os.Stdout, "[ipscoutdns] ", log.LstdFlags)
 var currentConfig Config
 var domainRegexes []*regexp.Regexp
 
+// Keep the standard log prefix and timestamp, indenting only the message.
+// log.Logger serializes writes, including concurrent passive domain workers.
+type indentedLogWriter struct {
+	output        io.Writer
+	messageOffset int
+}
+
+func (w indentedLogWriter) Write(p []byte) (int, error) {
+	if len(p) < w.messageOffset {
+		return w.output.Write(p)
+	}
+	indented := make([]byte, len(p)+1)
+	copy(indented, p[:w.messageOffset])
+	indented[w.messageOffset] = '\t'
+	copy(indented[w.messageOffset+1:], p[w.messageOffset:])
+	n, err := w.output.Write(indented)
+	if n > w.messageOffset {
+		n-- // The inserted tab is not part of the caller's bytes.
+	}
+	return n, err
+}
+
 func loadActiveDomainsFile(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -70,44 +92,56 @@ func main() {
 		}
 	}
 
-	logger.Printf("starting IPScoutDNS v3")
-	logger.Printf("mode: %s", cfg.Mode)
+	icmpEnabled := cfg.ICMPProbe && cfg.TLSRoute != "proxy"
+	logger.Printf("starting IPScoutDNS")
+	logger.Printf("- config")
+	logger.Printf("\t- mode: %s", cfg.Mode)
 	if cfg.Mode == "active" {
-		logger.Printf("UDP/TCP listen: %s", cfg.ListenAddr)
-		logger.Printf("DNS fallback: %s", cfg.FallbackDNS)
-		logger.Printf("fallback DNS interface: %s", configuredOrDefault(cfg.FallbackDNSInterface))
-		logger.Printf("loaded %d domain filters from %s", len(domainRegexes), cfg.ActiveDomainsFile)
+		logger.Printf("\t- UDP/TCP listen: %s", cfg.ListenAddr)
+		logger.Printf("\t- loaded %d domain filters from %s", len(domainRegexes), cfg.ActiveDomainsFile)
+		logger.Printf("\t- Probes enabled: TCP=%t TLS=%t HTTP=%t ICMP=%t", cfg.TCPProbe, cfg.TLSProbe, cfg.HTTPProbe, icmpEnabled)
+		logOtherConfigs(cfg)
+
 	} else {
-		logger.Printf("passive domains: %s", cfg.PassiveDomainsFile)
-		logger.Printf("resolve interval: %s; parallel domains: %d", cfg.PassiveResolveInterval, cfg.PassiveResolveParallel)
+		logger.Printf("\t- passive domains: %s", cfg.PassiveDomainsFile)
+		logger.Printf("\t- Probes enabled: TCP=%t TLS=%t HTTP=%t ICMP=%t", cfg.TCPProbe, cfg.TLSProbe, cfg.HTTPProbe, icmpEnabled)
+		logOtherConfigs(cfg)
 	}
-	logger.Printf("direct DNS resolvers: %d", len(cfg.DirectDNS))
-	logger.Printf("proxy DNS resolvers: %d", len(cfg.ProxyDNS))
-	logger.Printf("DNS SOCKS5 proxy: %s", cfg.DNSSOCKS5Addr)
-	logger.Printf("direct DNS interface: %s", configuredOrDefault(cfg.DirectDNSInterface))
+	logger.Printf("")
+	logger.Printf("\t- DNS direct resolvers: %d", len(cfg.DirectDNS))
+	if len(cfg.DirectDNS) > 0 {
+		logger.Printf("\t- DNS direct interface: %s", configuredOrDefault(cfg.DirectDNSInterface))
+	}
 	if cfg.Mode == "active" {
-		logger.Printf("cache TTL: %s", cfg.CacheTTL)
-		logger.Printf("answer TTL: %d", cfg.AnswerTTL)
-		logger.Printf("output copy interval: %s", cfg.ActiveCopyInterval)
+		logger.Printf("\t- DNS fallback: %s", cfg.FallbackDNS)
+		logger.Printf("\t- DNS fallback interface: %s", configuredOrDefault(cfg.FallbackDNSInterface))
 	}
-	logger.Printf("DNS timeout: %s", cfg.DNSTimeout)
-	logger.Printf("TLS timeout: %s", cfg.TLSTimeout)
-	logger.Printf("TLS port: %d", cfg.TLSPort)
-	logger.Printf("TLS route: %s", cfg.TLSRoute)
-	logger.Printf("Probes enabled: TCP=%t TLS=%t HTTP=%t ICMP=%t", cfg.TCPProbe, cfg.TLSProbe, cfg.HTTPProbe, cfg.ICMPProbe)
-	logger.Printf("HTTP fallback probe enabled: %t", cfg.HTTPProbe)
+	logger.Printf("\t- DNS proxy resolvers: %d", len(cfg.ProxyDNS))
+	if len(cfg.ProxyDNS) > 0 {
+		logger.Printf("\t- DNS SOCKS5 proxy: %s", cfg.DNSSOCKS5Addr)
+	}
+	logger.Printf("\t- DNS timeout: %s", cfg.DNSTimeout)
+	logger.Printf("")
+	logger.Printf("\t- TCP/TLS/HTTP port: %d/80", cfg.TLSPort)
+	logger.Printf("\t- TCP/TLS/HTTP/ICMP route: %s", cfg.TLSRoute)
 	if cfg.TLSRoute == "direct" {
-		logger.Printf("direct TCP interface: %s", configuredOrDefault(cfg.DirectTCPInterface))
+		logger.Printf("\t- TCP/TLS/HTTP/ICMP direct interface: %s", configuredOrDefault(cfg.DirectTCPInterface))
+	} else if cfg.TLSRoute == "proxy" {
+		logger.Printf("\t- TCP/TLS/HTTP SOCKS5 proxy: %s", cfg.TLSSOCKS5Addr)
 	}
-	logger.Printf("TLS SOCKS5 proxy: %s", cfg.TLSSOCKS5Addr)
-	logger.Printf("parallel TLS tests: %d", cfg.MaxParallelTests)
-	logger.Printf("maximum host IPs per domain: %d (0 = unlimited)", cfg.HostsMaxIPsPerDomain)
+	logger.Printf("\t- TCP/TLS/HTTP/ICMP timeout: %s", cfg.TLSTimeout)
+
 	if !cfg.LogsEnabled {
 		logger.SetOutput(io.Discard)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	logger.Printf("- output")
+	logger.SetOutput(indentedLogWriter{
+		output:        logger.Writer(),
+		messageOffset: len(logger.Prefix()) + len("2006/01/02 15:04:05 "),
+	})
 	if cfg.Mode == "passive" {
 		if err := runPassive(ctx, cfg); err != nil {
 			logger.Fatalf("passive mode: %v", err)
@@ -116,6 +150,18 @@ func main() {
 		runActive(ctx, cfg)
 	}
 	logger.Printf("IPScoutDNS stopped cleanly")
+}
+
+func logOtherConfigs(cfg Config) {
+	var modeSettings string
+	if cfg.Mode == "active" {
+		modeSettings = fmt.Sprintf("ttl=%s answer_ttl=%d active_copy_interval=%s", cfg.CacheTTL, cfg.AnswerTTL, cfg.ActiveCopyInterval)
+	} else {
+		modeSettings = fmt.Sprintf("passive_resolve_time=%q passive_resolve_interval=%s passive_resolve_parallel=%d", cfg.PassiveResolveTime, cfg.PassiveResolveInterval, cfg.PassiveResolveParallel)
+	}
+	logger.Printf("\t- Other configs: %s logs_enabled=%t parallel_tests=%d hosts_max_ips_per_domain=%d reachable_hosts=%q reachable_domains_file=%q reachable_ips_file=%q unreachable_domains_file=%q unreachable_ips_file=%q",
+		modeSettings, cfg.LogsEnabled, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain,
+		cfg.ReachableHostsFile, cfg.ReachableDomainsFile, cfg.ReachableIPsFile, cfg.UnreachableDomainsFile, cfg.UnreachableIPsFile)
 }
 
 func runActive(ctx context.Context, cfg Config) {

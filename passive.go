@@ -90,9 +90,9 @@ func resolvePassiveDomainWithProbes(ctx context.Context, domain string, cfg Conf
 }
 
 func runPassive(ctx context.Context, cfg Config) error {
-	return runPassiveWithCleanup(ctx, cfg, loadPassiveDomainsFile, resolvePassiveDomain, waitPassiveInterval, func() error {
-		return clearPassiveOutputDirectory("/tmp/ipscoutdns")
-	})
+	return runPassiveWithOutputs(ctx, cfg, loadPassiveDomainsFile, resolvePassiveDomain, waitPassiveInterval, func() error {
+		return clearPassiveOutputDirectory(outputSourceDirectory)
+	}, copyRuntimeOutputs)
 }
 
 // Passes never overlap. The interval starts when a complete pass finishes.
@@ -102,6 +102,10 @@ func runPassiveWith(ctx context.Context, cfg Config, load func(string) ([]string
 }
 
 func runPassiveWithCleanup(ctx context.Context, cfg Config, load func(string) ([]string, error), resolve passiveResolveFunc, wait func(context.Context, time.Duration) bool, cleanup func() error) error {
+	return runPassiveWithOutputs(ctx, cfg, load, resolve, wait, cleanup, func(context.Context) error { return nil })
+}
+
+func runPassiveWithOutputs(ctx context.Context, cfg Config, load func(string) ([]string, error), resolve passiveResolveFunc, wait func(context.Context, time.Duration) bool, cleanup func() error, copyOutputs func(context.Context) error) error {
 	firstPass := true
 	if cfg.PassiveResolveTime != "" {
 		next := nextPassiveResolveTime(time.Now(), cfg.PassiveResolveTime)
@@ -126,6 +130,12 @@ func runPassiveWithCleanup(ctx context.Context, cfg Config, load func(string) ([
 			}
 			logger.Printf("passive pass: %d domains, up to %d parallel resolves", len(domains), cfg.PassiveResolveParallel)
 			runPassiveBatch(ctx, domains, cfg, resolve)
+			if ctx.Err() != nil {
+				return nil
+			}
+			if err := copyOutputs(ctx); err != nil && ctx.Err() == nil {
+				logger.Printf("failed to copy passive outputs: %v", err)
+			}
 			if ctx.Err() == nil && cfg.PassiveResolveTime == "" {
 				logger.Printf("passive pass complete; next pass in %s", cfg.PassiveResolveInterval)
 			}

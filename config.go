@@ -31,6 +31,7 @@ const (
 	defaultAnswerTTL              = uint32(300)
 	defaultPassiveResolveInterval = 24 * time.Hour
 	defaultPassiveResolveParallel = 16
+	defaultActiveCopyInterval     = time.Hour
 )
 
 type Config struct {
@@ -40,6 +41,7 @@ type Config struct {
 	PassiveResolveTime     string
 	PassiveResolveInterval time.Duration
 	PassiveResolveParallel int
+	ActiveCopyInterval     time.Duration
 	DirectDNS              []string
 	ProxyDNS               []string
 	ListenAddr             string
@@ -83,6 +85,9 @@ func (c Config) validateWithInterfaceValidator(validateInterface func(string) er
 		return fmt.Errorf("at least one upstream resolver is required: direct_dns or proxy_dns")
 	}
 	if c.Mode == "active" {
+		if c.ActiveCopyInterval <= 0 {
+			return fmt.Errorf("active_copy_interval must be greater than zero")
+		}
 		if strings.TrimSpace(c.ActiveDomainsFile) == "" {
 			return fmt.Errorf("active_domains_file is required in active mode")
 		}
@@ -239,6 +244,7 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 	cfg := Config{
 		PassiveResolveInterval: defaultPassiveResolveInterval,
 		PassiveResolveParallel: defaultPassiveResolveParallel,
+		ActiveCopyInterval:     defaultActiveCopyInterval,
 		ListenAddr:             defaultListenAddr,
 		FallbackDNS:            defaultFallbackDNS,
 		SOCKS5Addr:             defaultSOCKS5Addr,
@@ -347,6 +353,12 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 					return cfg, fmt.Errorf("%s:%d: invalid passive_resolve_interval %q", path, lineNo, value)
 				}
 				cfg.PassiveResolveInterval = d
+			case "active_copy_interval":
+				d, err := time.ParseDuration(value)
+				if err != nil || d <= 0 {
+					return cfg, fmt.Errorf("%s:%d: invalid active_copy_interval %q", path, lineNo, value)
+				}
+				cfg.ActiveCopyInterval = d
 			case "passive_resolve_parallel":
 				v, err := strconv.Atoi(value)
 				if err != nil || v <= 0 {

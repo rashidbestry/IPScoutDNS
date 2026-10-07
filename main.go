@@ -88,6 +88,7 @@ func main() {
 	if cfg.Mode == "active" {
 		logger.Printf("cache TTL: %s", cfg.CacheTTL)
 		logger.Printf("answer TTL: %d", cfg.AnswerTTL)
+		logger.Printf("output copy interval: %s", cfg.ActiveCopyInterval)
 	}
 	logger.Printf("DNS timeout: %s", cfg.DNSTimeout)
 	logger.Printf("TLS timeout: %s", cfg.TLSTimeout)
@@ -118,6 +119,11 @@ func main() {
 }
 
 func runActive(ctx context.Context, cfg Config) {
+	copiesDone := make(chan struct{})
+	go func() {
+		defer close(copiesDone)
+		runActiveOutputCopies(ctx, cfg.ActiveCopyInterval, copyRuntimeOutputs, waitPassiveInterval)
+	}()
 	handler := dns.HandlerFunc(handleDNS)
 	udpServer := &dns.Server{Addr: cfg.ListenAddr, Net: "udp", Handler: handler}
 	tcpServer := &dns.Server{Addr: cfg.ListenAddr, Net: "tcp", Handler: handler}
@@ -145,6 +151,7 @@ func runActive(ctx context.Context, cfg Config) {
 	if err := tcpServer.Shutdown(); err != nil {
 		logger.Printf("TCP shutdown error: %v", err)
 	}
+	<-copiesDone
 }
 
 func configuredOrDefault(value string) string {

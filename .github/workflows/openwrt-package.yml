@@ -16,9 +16,7 @@ on:
   pull_request:
     paths:
       - "*.go"
-      - ipscoutdns.conf
-      - active-domains.txt
-      - passive-domains.txt
+      - config/**
       - go.mod
       - go.sum
       - packaging/openwrt/**
@@ -37,6 +35,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Test config generator
+        run: python3 -B -m unittest discover -s packaging/openwrt -p "test_*.py"
       - name: Install SDK extraction dependency
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y zstd
       - name: Build Linux ARM64 binary
@@ -59,8 +59,8 @@ jobs:
           package_dir="$sdk_dir/package/ipscoutdns"
           mkdir -p "$package_dir"
           cp -R packaging/openwrt/. "$package_dir/"
-          cp ipscoutdns.conf "$package_dir/files/ipscoutdns.conf"
-          cp active-domains.txt passive-domains.txt "$package_dir/files/"
+          cp config/ipscoutdns.conf "$package_dir/files/ipscoutdns.conf"
+          cp config/active-domains.txt config/passive-domains.txt "$package_dir/files/"
           cp "$RUNNER_TEMP/ipscoutdns" "$package_dir/files/ipscoutdns"
 
           generated_config="$RUNNER_TEMP/ipscoutdns-openwrt.conf"

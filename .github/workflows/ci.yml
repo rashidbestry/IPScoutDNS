@@ -22,6 +22,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - run: python -m unittest discover -s packaging/openwrt -p "test_*.py"
       - run: go test ./...
       - run: go build ./...
 

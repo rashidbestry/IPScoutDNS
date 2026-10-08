@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	defaultConfigPath  = "/etc/ipscoutdns.conf"
-	priorityConfigPath = "ipscoutdns.conf"
+	defaultConfigPath     = "/etc/ipscoutdns.conf"
+	priorityConfigPath    = "config/ipscoutdns.conf"
+	legacyLocalConfigPath = "ipscoutdns.conf"
 
 	defaultListenAddr             = "127.0.0.1:5354"
 	defaultFallbackDNS            = "127.0.0.1:53053"
@@ -216,6 +217,9 @@ func resolveConfigPathWith(configOverride string, legacyOverride string, localPa
 	}
 	if exists(localPath) {
 		return localPath
+	}
+	if exists(legacyLocalConfigPath) {
+		return legacyLocalConfigPath
 	}
 	if goos != "windows" && exists(systemPath) {
 		return systemPath
@@ -633,6 +637,17 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 	cfg.ProxyDNS = cleanList(cfg.ProxyDNS)
 	if err := cfg.validateWithInterfaceValidator(validateInterface); err != nil {
 		return cfg, err
+	}
+	configPath, err := filepath.Abs(path)
+	if err != nil {
+		return cfg, fmt.Errorf("resolve config path %s: %w", path, err)
+	}
+	// Resolve domain inputs beside the selected config, independent of the
+	// process working directory. Preserve absolute and rooted platform paths.
+	for _, input := range []*string{&cfg.ActiveDomainsFile, &cfg.PassiveDomainsFile} {
+		if *input != "" && !filepath.IsAbs(*input) && !os.IsPathSeparator((*input)[0]) {
+			*input = filepath.Join(filepath.Dir(configPath), *input)
+		}
 	}
 	return cfg, nil
 }

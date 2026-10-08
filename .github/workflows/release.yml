@@ -42,7 +42,7 @@ jobs:
         run: |
           mkdir -p dist
           go build -trimpath -o "dist/${{ matrix.binary }}" .
-          cp ipscoutdns.conf active-domains.txt passive-domains.txt dist/
+          cp -R config dist/
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -50,7 +50,7 @@ jobs:
         run: |
           archive="ipscoutdns-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.extension }}"
           if [ "${{ matrix.extension }}" = "zip" ]; then
-            (cd dist && zip -q "../$archive" *)
+            (cd dist && zip -qr "../$archive" .)
           else
             tar -C dist -czf "$archive" .
           fi

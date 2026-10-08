@@ -5,3 +5,4 @@
 *.md
 .venv
 .go-cache
+__pycache__/

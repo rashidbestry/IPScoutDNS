@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -34,8 +35,34 @@ func TestResolveConfigPathWith(t *testing.T) {
 		{
 			name:     "local config precedes system config",
 			goos:     "linux",
-			existing: map[string]bool{"local.conf": true, "system.conf": true},
-			want:     "local.conf",
+			existing: map[string]bool{priorityConfigPath: true, "system.conf": true},
+			want:     priorityConfigPath,
+		},
+		{
+			name:     "config folder precedes legacy root config",
+			goos:     "linux",
+			existing: map[string]bool{priorityConfigPath: true, legacyLocalConfigPath: true},
+			want:     priorityConfigPath,
+		},
+		{
+			name:     "legacy root config precedes unix system config",
+			goos:     "linux",
+			existing: map[string]bool{legacyLocalConfigPath: true, "system.conf": true},
+			want:     legacyLocalConfigPath,
+		},
+		{
+			name:          "windows config folder precedes user config",
+			goos:          "windows",
+			userConfigDir: "user-config",
+			existing:      map[string]bool{priorityConfigPath: true, legacyLocalConfigPath: true, userConfigPath: true},
+			want:          priorityConfigPath,
+		},
+		{
+			name:          "windows legacy root config remains supported",
+			goos:          "windows",
+			userConfigDir: "user-config",
+			existing:      map[string]bool{legacyLocalConfigPath: true, userConfigPath: true},
+			want:          legacyLocalConfigPath,
 		},
 		{
 			name:     "unix system config remains supported",
@@ -52,7 +79,7 @@ func TestResolveConfigPathWith(t *testing.T) {
 		{
 			name: "windows falls back to local path if config directory is unavailable",
 			goos: "windows",
-			want: "local.conf",
+			want: priorityConfigPath,
 		},
 		{
 			name: "unix default remains system config path",
@@ -63,7 +90,7 @@ func TestResolveConfigPathWith(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := resolveConfigPathWith(test.configOverride, test.legacyOverride, "local.conf", "system.conf", test.goos, test.userConfigDir, func(path string) bool {
+			got := resolveConfigPathWith(test.configOverride, test.legacyOverride, priorityConfigPath, "system.conf", test.goos, test.userConfigDir, func(path string) bool {
 				return test.existing[path]
 			})
 			if got != test.want {
@@ -74,7 +101,7 @@ func TestResolveConfigPathWith(t *testing.T) {
 }
 
 func TestSampleConfigUsesTCPReachabilitySettings(t *testing.T) {
-	cfg, err := loadConfig("ipscoutdns.conf")
+	cfg, err := loadConfig(priorityConfigPath)
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
@@ -89,6 +116,56 @@ func TestSampleConfigUsesTCPReachabilitySettings(t *testing.T) {
 	}
 	if cfg.DirectTCPInterface != "default" {
 		t.Errorf("DirectTCPInterface = %q, want default", cfg.DirectTCPInterface)
+	}
+}
+
+func TestDomainInputsResolvedBesideConfig(t *testing.T) {
+	for _, mode := range []string{"active", "passive"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "config")
+			if err := os.MkdirAll(filepath.Join(dir, "lists"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			activePath := filepath.Join(dir, "lists", "active.txt")
+			passivePath := filepath.Join(dir, "passive.txt")
+			if err := os.WriteFile(activePath, []byte("^example\\.com$\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(passivePath, []byte("example.com\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "ipscoutdns.conf")
+			contents := "mode=" + mode + "\ndirect_dns=1.1.1.1\nactive_domains_file=lists/active.txt\npassive_domains_file=passive.txt\n"
+			if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := loadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ActiveDomainsFile != activePath || cfg.PassiveDomainsFile != passivePath {
+				t.Fatalf("domain inputs resolved outside config directory: %q / %q", cfg.ActiveDomainsFile, cfg.PassiveDomainsFile)
+			}
+			if _, err := os.ReadFile(cfg.ActiveDomainsFile); err != nil {
+				t.Fatal(err)
+			}
+			domains, err := loadPassiveDomainsFile(cfg.PassiveDomainsFile)
+			if err != nil || len(domains) != 1 || domains[0] != "example.com" {
+				t.Fatalf("passive input could not be loaded: %v %v", domains, err)
+			}
+		})
+	}
+}
+
+func TestAbsoluteDomainInputsAndEmptyOptionalInputPreserved(t *testing.T) {
+	for _, input := range []string{filepath.Join(t.TempDir(), "domains.txt"), "/etc/ipscoutdns/active-domains.txt"} {
+		cfg, err := loadConfig(writeModeTestFile(t, "mode=active\ndirect_dns=1.1.1.1\nactive_domains_file="+input+"\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ActiveDomainsFile != input || cfg.PassiveDomainsFile != "" {
+			t.Fatalf("absolute or omitted input changed: %q / %q", cfg.ActiveDomainsFile, cfg.PassiveDomainsFile)
+		}
 	}
 }
 
@@ -273,23 +350,30 @@ func TestOpenWrtPackageConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
-	if cfg.ListenAddr != "127.0.0.1:5354" {
-		t.Fatalf("ListenAddr = %q, want 127.0.0.1:5354", cfg.ListenAddr)
+	expected, err := loadConfig(priorityConfigPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if cfg.Mode != "active" {
-		t.Fatalf("Mode = %q, want active", cfg.Mode)
+	// Packaging only relocates inputs. All other source settings must survive,
+	// including proxy resolvers, listener/route, probes, logging and scheduling.
+	if expected.ActiveDomainsFile != "" {
+		expected.ActiveDomainsFile = "/etc/ipscoutdns/active-domains.txt"
 	}
-	if cfg.ActiveDomainsFile != "/etc/ipscoutdns/active-domains.txt" {
-		t.Fatalf("ActiveDomainsFile = %q, want /etc/ipscoutdns/active-domains.txt", cfg.ActiveDomainsFile)
+	if expected.PassiveDomainsFile != "" {
+		expected.PassiveDomainsFile = "/etc/ipscoutdns/passive-domains.txt"
 	}
-	if cfg.PassiveDomainsFile != "/etc/ipscoutdns/passive-domains.txt" {
-		t.Fatalf("PassiveDomainsFile = %q, want /etc/ipscoutdns/passive-domains.txt", cfg.PassiveDomainsFile)
+	if !reflect.DeepEqual(cfg, expected) {
+		t.Fatalf("generated config lost or changed source settings:\ngot:  %+v\nwant: %+v", cfg, expected)
 	}
-	if cfg.TLSRoute != "direct" {
-		t.Fatalf("TLSRoute = %q, want direct", cfg.TLSRoute)
+	runtimeDir, err := runtimeOutputDirectoryWith("linux", func(string) ([]byte, error) {
+		return []byte("ID=openwrt\n"), nil
+	}, os.Executable)
+	if err != nil || runtimeDir != openWrtOutputDirectory {
+		t.Fatalf("OpenWrt runtime directory = %q, error = %v", runtimeDir, err)
 	}
-	if len(cfg.ProxyDNS) != 0 {
-		t.Fatalf("ProxyDNS = %#v, want no proxy resolvers", cfg.ProxyDNS)
+	testOutputDir := t.TempDir()
+	if err := configureOutputPaths(&cfg, testOutputDir, false); err != nil {
+		t.Fatal(err)
 	}
 
 	outputs := []struct {
@@ -303,8 +387,8 @@ func TestOpenWrtPackageConfig(t *testing.T) {
 		{name: "unreachable IPs", path: cfg.UnreachableIPsFile},
 	}
 	for _, output := range outputs {
-		if !strings.HasPrefix(output.path, "/tmp/ipscoutdns/") {
-			t.Errorf("%s output path = %q, want path under /tmp/ipscoutdns/", output.name, output.path)
+		if output.path != "" && filepath.Dir(output.path) != testOutputDir {
+			t.Errorf("%s output path = %q, want path under selected output directory", output.name, output.path)
 		}
 	}
 }

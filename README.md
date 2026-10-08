@@ -24,8 +24,10 @@ go build -o ipscoutdns .
 Run with an explicit config file:
 
 ```sh
-go run . --config ipscoutdns.conf
+go run . --config config/ipscoutdns.conf
 ```
+
+The shared config and both domain lists live in `config/` in the workspace and release archives. Running `go run .` from the workspace root discovers `config/ipscoutdns.conf` automatically.
 
 The sample config listens on port 53. Use a port above 1024 if the operating system requires elevated privileges for low ports.
 
@@ -51,7 +53,7 @@ passive_resolve_interval=24h
 passive_resolve_parallel=16
 ```
 
-Both modes use the same `ipscoutdns.conf`: change `mode=active` to `mode=passive` and run `go run . --config ipscoutdns.conf`. Upstream resolvers, interface selectors, probe settings, and output paths are shared. Edit `passive-domains.txt` to choose the domains. It accepts one ASCII hostname per line (punycode for international names), blank lines and `#`/`;` comments. Names are lowercased, a trailing dot is removed, and duplicates are resolved once per pass. Regexes, wildcards, URLs and IP addresses are rejected.
+Both modes use the same `config/ipscoutdns.conf`: change `mode=active` to `mode=passive` and run `go run . --config config/ipscoutdns.conf`. Upstream resolvers, interface selectors, probe settings, and output paths are shared. Edit `config/passive-domains.txt` to choose the domains. It accepts one ASCII hostname per line (punycode for international names), blank lines and `#`/`;` comments. Names are lowercased, a trailing dot is removed, and duplicates are resolved once per pass. Regexes, wildcards, URLs and IP addresses are rejected.
 
 Set `passive_resolve_time=03:00` to run daily at 03:00 in the machine's local timezone. This overrides the interval schedule and waits for the next occurrence after startup. Missed runs are skipped. Before each pass, contents of the dedicated output directory on Linux/OpenWrt (including subdirectories) are cleared, except saved console log files; the directory remains. On Windows, only configured output files are cleared, preserving the executable and its logs folder. Cleanup errors stop passive mode. Keep Linux/OpenWrt input files outside the output directory. With `passive_resolve_time` blank (the default), the first pass starts immediately. After a complete pass, the daemon waits `passive_resolve_interval` (default `24h`), reloads the domain list, and starts another pass. Passes never overlap. A missing/invalid list fails startup; a later list error is logged and that pass is skipped. An empty list is allowed and performs no work until the next reload.
 
@@ -83,9 +85,9 @@ With `tcp_route=direct`, after TCP failure, ICMP checks try up to three single-p
 
 ## Configuration lookup
 
-The `--config` argument takes precedence, followed by `IPSCOUTDNS_CONFIG`, then the legacy `IPSELECTOR_CONFIG` environment variable. Without an explicit path, IPScoutDNS checks `ipscoutdns.conf` in the current directory. On Unix it also checks `/etc/ipscoutdns.conf`; on Windows it checks the per-user config directory under `IPScoutDNS/ipscoutdns.conf`.
+The `--config` argument takes precedence, followed by `IPSCOUTDNS_CONFIG`, then the legacy `IPSELECTOR_CONFIG` environment variable. Without an explicit path, IPScoutDNS checks `config/ipscoutdns.conf` in the current directory first, then the legacy root-level `ipscoutdns.conf`. On Unix it also checks `/etc/ipscoutdns.conf`; on Windows it checks the per-user config directory under `IPScoutDNS/ipscoutdns.conf`.
 
-Relative input paths in the config, including the domains files, are resolved from the process working directory. Output filenames are placed in the OS-selected directory described above, independently of the working directory.
+Relative domain-file paths are resolved from the directory containing the selected config file, independently of the process working directory. Absolute input paths are preserved. Output filenames are placed in the OS-selected directory described above, independently of the working directory.
 
 Interface selectors bind traffic to a local source IP. They do not guarantee that traffic is pinned to a physical network device.
 
@@ -104,15 +106,16 @@ The package installs the binary at `/usr/bin/ipscoutdns`, config at `/etc/ipscou
 /etc/init.d/ipscoutdns start
 ```
 
-The package generates its OpenWrt config and domain lists during packaging from the repository-root `ipscoutdns.conf`, `active-domains.txt`, and `passive-domains.txt`. The config applies router-specific listener, route, and file-path overrides and listens on `127.0.0.1:5354` to avoid conflicting with dnsmasq. The package does not modify dnsmasq settings; configure DNS forwarding separately if desired.
+The package generates its OpenWrt config and domain lists during packaging from `config/ipscoutdns.conf`, `config/active-domains.txt`, and `config/passive-domains.txt`. The generated config preserves all source settings, including the listener, proxy resolvers, route, probes, logging, schedules, and output filenames. Only nonempty domain-list paths are rewritten to their installed `/etc/ipscoutdns/` locations. Choose a listener port that is free on the router; the generator uses the source listener unchanged. The package does not modify dnsmasq settings; configure DNS forwarding separately if desired.
 
 The packaged config defaults to `mode=active`. To use Passive mode, set `mode=passive` in `/etc/ipscoutdns.conf`, edit `/etc/ipscoutdns/passive-domains.txt`, and restart the service. Keep output paths under `/tmp/ipscoutdns/` in either mode.
 
-All writable runtime output files are configured under `/tmp/ipscoutdns/`. The service creates this directory at startup. OpenWrt clears `/tmp` on reboot. The package uses the router's `/bin/ping` and depends on `ca-bundle` for TLS certificate validation.
+All writable runtime output files are stored under `/tmp/ipscoutdns/`, selected automatically on OpenWrt. The service creates this directory at startup. OpenWrt clears `/tmp` on reboot. The package uses the router's `/bin/ping` and depends on `ca-bundle` for TLS certificate validation.
 
 ## Validation
 
 ```sh
+python -m unittest discover -s packaging/openwrt -p "test_*.py"
 go test ./...
 go build ./...
 ```

@@ -80,19 +80,32 @@ func TestModeConfig(t *testing.T) {
 }
 
 func TestSharedSampleConfigSupportsPassiveMode(t *testing.T) {
-	contents, err := os.ReadFile("ipscoutdns.conf")
+	contents, err := os.ReadFile(priorityConfigPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	active, err := loadConfig("ipscoutdns.conf")
+	path := writeModeTestFile(t, string(contents))
+	for _, name := range []string{"active-domains.txt", "passive-domains.txt"} {
+		data, err := os.ReadFile(filepath.Join("config", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(filepath.Dir(path), name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active, err := loadConfig(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadConfig(writeModeTestFile(t, strings.Replace(string(contents), "mode=active", "mode=passive", 1)))
+	if err := os.WriteFile(path, []byte(strings.Replace(string(contents), "mode=active", "mode=passive", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Mode != "passive" || cfg.PassiveDomainsFile != "passive-domains.txt" || cfg.PassiveResolveParallel != 16 || cfg.PassiveResolveInterval != 24*time.Hour {
+	if cfg.Mode != "passive" || cfg.PassiveDomainsFile != filepath.Join(filepath.Dir(path), "passive-domains.txt") || cfg.PassiveResolveParallel != 16 || cfg.PassiveResolveInterval != 24*time.Hour {
 		t.Fatalf("unexpected passive config: %+v", cfg)
 	}
 	active.Mode = "passive"

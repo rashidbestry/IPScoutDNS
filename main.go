@@ -144,9 +144,8 @@ func main() {
 	}
 	logger.Printf("\t- TCP/TLS/HTTP timeout: %s", cfg.TLSTimeout)
 
-	if !cfg.LogsEnabled {
-		logger.SetOutput(loggingOutput(os.Stdout, false, cfg.savedLog))
-	}
+	// Startup/config logs always appear; only runtime console logs are optional.
+	logger.SetOutput(loggingOutput(os.Stdout, cfg.LogsEnabled, cfg.savedLog))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -162,7 +161,7 @@ func main() {
 	} else {
 		runActive(ctx, cfg)
 	}
-	logger.Printf("IPScoutDNS stopped cleanly")
+	finishLogging(cfg)
 }
 
 func logOtherConfigs(cfg Config) {

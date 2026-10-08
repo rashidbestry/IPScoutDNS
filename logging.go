@@ -15,6 +15,7 @@ import (
 )
 
 const savedLogPrefix = "ipscoutdns_log_"
+const logCopyBufferSize = 64 * 1024
 
 type savedLog struct {
 	mu              sync.Mutex
@@ -199,16 +200,89 @@ func (l *savedLog) Close() error {
 	return l.file.Close()
 }
 
-func (l *savedLog) snapshot(ctx context.Context) ([]byte, error) {
+// Capture a fixed prefix at a complete log-record boundary. Holding a separate
+// reader keeps the snapshot usable when the writer appends or rotates afterward.
+func (l *savedLog) openSnapshot(path string) (*os.File, int64, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if path == l.path {
+		if err := l.file.Sync(); err != nil {
+			return nil, 0, err
+		}
+	}
+	source, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := source.Stat()
+	if err != nil {
+		source.Close()
+		return nil, 0, err
+	}
+	if !info.Mode().IsRegular() {
+		source.Close()
+		return nil, 0, fmt.Errorf("%s must be a regular log file", path)
+	}
+	return source, info.Size(), nil
+}
+
+// Stage exactly the captured prefix, then replace the archive only after a
+// complete copy. Check cancellation between bounded reads and before publishing.
+func writeLogSnapshot(ctx context.Context, source io.Reader, size int64, name, destination string, buffer []byte) error {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
-	if err := l.file.Sync(); err != nil {
-		return nil, err
+	if err := os.MkdirAll(destination, 0755); err != nil {
+		return err
 	}
-	return os.ReadFile(l.path)
+	file, err := os.CreateTemp(destination, ".ipscoutdns-log-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		file.Close()
+		_ = os.Remove(file.Name())
+	}()
+	if err := file.Chmod(0644); err != nil {
+		return err
+	}
+	for remaining := size; remaining > 0; {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		chunk := int64(len(buffer))
+		if remaining < chunk {
+			chunk = remaining
+		}
+		n, err := io.ReadFull(source, buffer[:chunk])
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		written, err := file.Write(buffer[:n])
+		if err != nil {
+			return err
+		}
+		if written != n {
+			return io.ErrShortWrite
+		}
+		remaining -= int64(n)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), filepath.Join(destination, name))
 }
 
 type savedLogEntry struct {
@@ -313,6 +387,7 @@ func (l *savedLog) copyTo(ctx context.Context, destination string) (int, error) 
 		return 0, err
 	}
 	copied := 0
+	buffer := make([]byte, logCopyBufferSize)
 	for _, entry := range logs {
 		if err := ctx.Err(); err != nil {
 			return copied, err
@@ -324,26 +399,24 @@ func (l *savedLog) copyTo(ctx context.Context, destination string) (int, error) 
 			info, statErr := os.Lstat(filepath.Join(destination, entry.name))
 			alreadyCopied = statErr == nil && info.Mode().IsRegular() && info.Size() == entry.size
 		}
+		l.mu.Unlock()
 		if alreadyCopied {
-			l.mu.Unlock()
 			continue
 		}
-		if path == l.path {
-			err = l.file.Sync()
-		}
-		var data []byte
-		if err == nil {
-			data, err = os.ReadFile(path)
-		}
-		l.mu.Unlock()
+		source, size, err := l.openSnapshot(path)
 		if err != nil {
 			return copied, err
 		}
-		if _, err := writeOutputSnapshot(ctx, map[string][]byte{entry.name: data}, destination); err != nil {
+		err = writeLogSnapshot(ctx, source, size, entry.name, destination, buffer)
+		closeErr := source.Close()
+		if err != nil {
 			return copied, err
 		}
+		if closeErr != nil {
+			return copied, closeErr
+		}
 		l.mu.Lock()
-		l.copiedSizes[entry.name] = int64(len(data))
+		l.copiedSizes[entry.name] = size
 		l.mu.Unlock()
 		copied++
 	}
@@ -356,6 +429,36 @@ func (l *savedLog) copyTo(ctx context.Context, destination string) (int, error) 
 		return copied, err
 	}
 	return copied, l.pruneSourceLocked()
+}
+
+const finalActiveLogCopyTimeout = 5 * time.Second
+
+func finishLogging(cfg Config) {
+	finishLoggingWithCopy(cfg, os.Stdout, finalActiveLogCopyTimeout, func(ctx context.Context) error {
+		return copyRuntimeLog(ctx, cfg, filepath.Join(outputDestinationDirectory, "logs"))
+	})
+}
+
+func finishLoggingWithCopy(cfg Config, console io.Writer, timeout time.Duration, copyLog func(context.Context) error) {
+	logger.Printf("IPScoutDNS stopped cleanly")
+	if cfg.Mode != "active" || !cfg.SaveLogs || cfg.outputDirectoryShared || cfg.savedLog == nil {
+		return
+	}
+
+	// Servers and periodic copy workers have stopped. Freeze the saved log so
+	// the final copy includes all shutdown messages without a new confirmation tail.
+	savedWriter := logger.Writer()
+	logger.SetOutput(indentedLogWriter{
+		output:        loggingOutput(console, cfg.LogsEnabled, nil),
+		messageOffset: len(logger.Prefix()) + len("2006/01/02 15:04:05 "),
+	})
+	// The service context is already canceled; give this last copy its own deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := copyLog(ctx); err != nil {
+		logger.SetOutput(savedWriter)
+		logger.Printf("failed to copy final active log: %v", err)
+	}
 }
 
 // Saving is independent of console suppression. Writes are unbuffered, so

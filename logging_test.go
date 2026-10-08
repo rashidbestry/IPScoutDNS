@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -11,6 +13,154 @@ import (
 	"testing"
 	"time"
 )
+
+// Whole-file reads are convenient for assertions, but never used by log copies.
+func (l *savedLog) snapshot(ctx context.Context) ([]byte, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := l.file.Sync(); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(l.path)
+}
+
+type logSnapshotReaderFunc func([]byte) (int, error)
+
+func (f logSnapshotReaderFunc) Read(p []byte) (int, error) { return f(p) }
+
+func TestLogSnapshotStreamsBoundedChunks(t *testing.T) {
+	const size = int64(8*1024*1024 + 17)
+	remaining, reads := size, 0
+	wantHash := sha256.New()
+	source := logSnapshotReaderFunc(func(p []byte) (int, error) {
+		reads++
+		if len(p) > logCopyBufferSize {
+			t.Fatalf("unbounded read: %d bytes", len(p))
+		}
+		if remaining == 0 {
+			t.Fatal("read beyond the snapshot boundary")
+		}
+		n := len(p)
+		if int64(n) > remaining {
+			n = int(remaining)
+		}
+		for i := 0; i < n; i++ {
+			p[i] = byte((size - remaining + int64(i)) % 251)
+		}
+		wantHash.Write(p[:n])
+		remaining -= int64(n)
+		return n, nil
+	})
+	destination := t.TempDir()
+	if err := writeLogSnapshot(context.Background(), source, size, "log.txt", destination, make([]byte, logCopyBufferSize)); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 || reads != int((size+logCopyBufferSize-1)/logCopyBufferSize) {
+		t.Fatalf("remaining=%d, reads=%d", remaining, reads)
+	}
+	file, err := os.Open(filepath.Join(destination, "log.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	gotHash := sha256.New()
+	n, err := io.Copy(gotHash, file)
+	if err != nil || n != size || !bytes.Equal(gotHash.Sum(nil), wantHash.Sum(nil)) {
+		t.Fatalf("streamed snapshot corrupted: size=%d error=%v", n, err)
+	}
+}
+
+func TestLogSnapshotExcludesConcurrentAppendAndSurvivesRotation(t *testing.T) {
+	prefix := strings.Repeat("complete record\n", 10000)
+	cfg := rotationLog(t, false, int64(len(prefix)+100), 7)
+	writeLogRecord(t, cfg.savedLog, prefix)
+	path := cfg.savedLog.path
+	source, size, err := cfg.savedLog.openSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	// These writes must be able to take the logging lock during streaming.
+	firstRead := true
+	reader := logSnapshotReaderFunc(func(p []byte) (int, error) {
+		if firstRead {
+			firstRead = false
+			writeLogRecord(t, cfg.savedLog, "appended after snapshot\n")
+			writeLogRecord(t, cfg.savedLog, strings.Repeat("next file\n", 20))
+			if cfg.savedLog.path == path {
+				t.Fatal("writer did not rotate")
+			}
+		}
+		return source.Read(p)
+	})
+	destination := t.TempDir()
+	name := filepath.Base(path)
+	if err := writeLogSnapshot(context.Background(), reader, size, name, destination, make([]byte, logCopyBufferSize)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(destination, name))
+	if err != nil || string(data) != prefix {
+		t.Fatalf("snapshot included later bytes or lost its prefix: %v", err)
+	}
+	if _, err := cfg.savedLog.copyTo(context.Background(), destination); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(filepath.Join(destination, name))
+	if err != nil || string(data) != prefix+"appended after snapshot\n" {
+		t.Fatalf("next copy lost the pending tail: %v", err)
+	}
+}
+
+func TestLogSnapshotFailurePreservesArchiveAndCleansTemporaryFile(t *testing.T) {
+	for _, failure := range []string{"canceled before copy", "canceled mid-copy", "short source", "read failure"} {
+		t.Run(failure, func(t *testing.T) {
+			destination := t.TempDir()
+			path := filepath.Join(destination, "log.txt")
+			if err := os.WriteFile(path, []byte("previous complete archive"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var source io.Reader = strings.NewReader(strings.Repeat("x", 2*logCopyBufferSize))
+			wantErr := context.Canceled
+			switch failure {
+			case "canceled before copy":
+				cancel()
+			case "canceled mid-copy":
+				reads := 0
+				original := source
+				source = logSnapshotReaderFunc(func(p []byte) (int, error) {
+					reads++
+					if reads == 2 {
+						cancel()
+					}
+					return original.Read(p)
+				})
+			case "short source":
+				source = strings.NewReader("short")
+				wantErr = io.ErrUnexpectedEOF
+			case "read failure":
+				wantErr = errors.New("source read failed")
+				source = logSnapshotReaderFunc(func([]byte) (int, error) { return 0, wantErr })
+			}
+			err := writeLogSnapshot(ctx, source, int64(2*logCopyBufferSize), "log.txt", destination, make([]byte, logCopyBufferSize))
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("error=%v, want %v", err, wantErr)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil || string(data) != "previous complete archive" {
+				t.Fatal("failed copy replaced the previous archive")
+			}
+			entries, err := os.ReadDir(destination)
+			if err != nil || len(entries) != 1 || entries[0].Name() != "log.txt" {
+				t.Fatalf("temporary file leaked: %v %v", entries, err)
+			}
+		})
+	}
+}
 
 func TestSaveLogsConfig(t *testing.T) {
 	for _, mode := range []string{"active", "passive"} {
@@ -212,5 +362,107 @@ func TestActiveLogCopyIntervalAndRetry(t *testing.T) {
 		})
 	if copies != 2 {
 		t.Fatalf("copies=%d", copies)
+	}
+}
+
+func setTestOutputLogger(t *testing.T, cfg Config, console *bytes.Buffer) {
+	t.Helper()
+	oldWriter := logger.Writer()
+	logger.SetOutput(indentedLogWriter{
+		output:        loggingOutput(console, cfg.LogsEnabled, cfg.savedLog),
+		messageOffset: len(logger.Prefix()) + len("2006/01/02 15:04:05 "),
+	})
+	t.Cleanup(func() { logger.SetOutput(oldWriter) })
+}
+
+func TestFinalActiveLogCopyIncludesShutdownAndPendingLogs(t *testing.T) {
+	cfg := rotationLog(t, false, 128, 7)
+	cfg.Mode, cfg.LogsEnabled = "active", true
+	var console bytes.Buffer
+	setTestOutputLogger(t, cfg, &console)
+	logger.Printf("%s", strings.Repeat("earlier message ", 10))
+	logger.Printf("shutdown signal received, stopping DNS servers")
+	destination := t.TempDir()
+	finishLoggingWithCopy(cfg, &console, finalActiveLogCopyTimeout, func(ctx context.Context) error {
+		if ctx.Err() != nil {
+			t.Fatal("final copy started with a canceled context")
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("final copy has no deadline")
+		}
+		return copyRuntimeLog(ctx, cfg, destination)
+	})
+	records, err := listSavedLogs(cfg.savedLog.dir)
+	if err != nil || len(records) < 2 {
+		t.Fatalf("pending rotated logs: %v, %v", records, err)
+	}
+	var archived bytes.Buffer
+	for _, record := range records {
+		source, err := os.ReadFile(filepath.Join(cfg.savedLog.dir, record.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		copy, err := os.ReadFile(filepath.Join(destination, record.name))
+		if err != nil || !bytes.Equal(source, copy) {
+			t.Fatalf("final archive differs from source %s: %v", record.name, err)
+		}
+		archived.Write(copy)
+	}
+	for _, message := range []string{"earlier message", "\tshutdown signal received", "\tIPScoutDNS stopped cleanly"} {
+		if !strings.Contains(archived.String(), message) {
+			t.Fatalf("archive missing %q: %s", message, archived.String())
+		}
+	}
+	if !strings.Contains(console.String(), "\tcopied ") || strings.Contains(archived.String(), "copied ") {
+		t.Fatal("final copy confirmation must appear only in the console")
+	}
+}
+
+func TestFinalActiveLogCopyTimeoutPreservesFailure(t *testing.T) {
+	cfg := testSavedLog(t, false)
+	cfg.Mode = "active"
+	var console bytes.Buffer
+	setTestOutputLogger(t, cfg, &console)
+	finishLoggingWithCopy(cfg, &console, 10*time.Millisecond, func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	data, err := cfg.savedLog.snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("IPScoutDNS stopped cleanly")) || !bytes.Contains(data, []byte("failed to copy final active log: context deadline exceeded")) {
+		t.Fatalf("shutdown or copy failure was not saved: %s", data)
+	}
+	if console.Len() != 0 {
+		t.Fatal("logs_enabled=false printed shutdown output")
+	}
+}
+
+func TestFinalLogCopySkippedWhenNotNeeded(t *testing.T) {
+	for _, name := range []string{"passive", "windows", "saving disabled", "no saved log"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testSavedLog(t, false)
+			cfg.Mode, cfg.LogsEnabled = "active", true
+			switch name {
+			case "passive":
+				cfg.Mode = "passive"
+			case "windows":
+				cfg.outputDirectoryShared = true
+			case "saving disabled":
+				cfg.SaveLogs = false
+			case "no saved log":
+				cfg.savedLog = nil
+			}
+			var console bytes.Buffer
+			setTestOutputLogger(t, cfg, &console)
+			finishLoggingWithCopy(cfg, &console, finalActiveLogCopyTimeout, func(context.Context) error {
+				t.Fatal("unexpected final log copy")
+				return nil
+			})
+			if !strings.Contains(console.String(), "\tIPScoutDNS stopped cleanly") {
+				t.Fatal("shutdown message missing")
+			}
+		})
 	}
 }

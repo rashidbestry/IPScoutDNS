@@ -98,6 +98,9 @@ func main() {
 	}
 	logger.SetOutput(loggingOutput(os.Stdout, true, cfg.savedLog))
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	cfg.runtimeContext = ctx
 	currentConfig = cfg
 	if cfg.Mode == "active" {
 		if err := loadActiveDomainsFile(cfg.ActiveDomainsFile); err != nil {
@@ -134,6 +137,7 @@ func main() {
 		logger.Printf("\t- DNS SOCKS5 proxy: %s", cfg.DNSSOCKS5Addr)
 	}
 	logger.Printf("\t- DNS timeout: %s", cfg.DNSTimeout)
+	logger.Printf("\t- DNS query parallel: %d (global)", cfg.DNSQueryParallel)
 	logger.Printf("")
 	logger.Printf("\t- TCP/TLS/HTTP port: %d/80", cfg.TLSPort)
 	logger.Printf("\t- TCP/TLS/HTTP/ICMP route: %s", cfg.TLSRoute)
@@ -147,8 +151,6 @@ func main() {
 	// Startup/config logs always appear; only runtime console logs are optional.
 	logger.SetOutput(loggingOutput(os.Stdout, cfg.LogsEnabled, cfg.savedLog))
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	logger.Printf("- output")
 	logger.SetOutput(indentedLogWriter{
 		output:        logger.Writer(),

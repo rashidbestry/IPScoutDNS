@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -24,6 +25,7 @@ const (
 	defaultTLSSOCKS5Addr          = "127.0.0.1:1080"
 	defaultCacheTTL               = 24 * time.Hour
 	defaultDNSTimeout             = 3 * time.Second
+	defaultDNSQueryParallel       = 4
 	defaultTLSTimeout             = 3 * time.Second
 	defaultTLSPort                = 443
 	defaultTLSRoute               = "direct"
@@ -60,6 +62,7 @@ type Config struct {
 	TLSProxyPort           int
 	CacheTTL               time.Duration
 	DNSTimeout             time.Duration
+	DNSQueryParallel       int
 	TLSTimeout             time.Duration
 	TLSPort                int
 	TLSRoute               string
@@ -82,6 +85,7 @@ type Config struct {
 	outputDirectory        string // selected at startup, independent of the working directory
 	outputDirectoryShared  bool   // Windows stores outputs beside the executable
 	savedLog               *savedLog
+	runtimeContext         context.Context // canceled when the service shuts down
 }
 
 func (c Config) validate() error {
@@ -157,6 +161,9 @@ func (c Config) validateWithInterfaceValidator(validateInterface func(string) er
 	}
 	if c.DNSTimeout <= 0 {
 		return fmt.Errorf("server.dns_timeout must be greater than zero")
+	}
+	if c.DNSQueryParallel <= 0 {
+		return fmt.Errorf("dns_query_parallel must be greater than zero")
 	}
 	if c.TLSTimeout <= 0 {
 		return fmt.Errorf("server.tcp_timeout must be greater than zero")
@@ -275,6 +282,7 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 		TLSSOCKS5Addr:          defaultTLSSOCKS5Addr,
 		CacheTTL:               defaultCacheTTL,
 		DNSTimeout:             defaultDNSTimeout,
+		DNSQueryParallel:       defaultDNSQueryParallel,
 		TLSTimeout:             defaultTLSTimeout,
 		TLSPort:                defaultTLSPort,
 		TLSRoute:               defaultTLSRoute,
@@ -534,6 +542,12 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 					return cfg, fmt.Errorf("%s:%d: invalid dns proxy port %q", path, lineNo, value)
 				}
 				rawDNSProxyPort = value
+			case "dns_query_parallel":
+				v, err := strconv.Atoi(value)
+				if err != nil || v <= 0 {
+					return cfg, fmt.Errorf("%s:%d: invalid dns_query_parallel %q", path, lineNo, value)
+				}
+				cfg.DNSQueryParallel = v
 			case "parallel_tests", "max_parallel_tests":
 				v, err := strconv.Atoi(value)
 				if err != nil || v <= 0 {

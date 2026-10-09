@@ -77,3 +77,16 @@ Resolver logs report DNS response codes and A-record counts, including
 identify HTTP errors such as `403` and `429`, unreadable or malformed DNS bodies,
 and candidates discarded by IPv4 validation. An HTTP `200` response alone does
 not mean a resolver supplied usable IPv4 addresses.
+
+## Early HTTP fallback
+
+`http_fallback_tls_alerts=2` starts HTTP probing early when that many distinct
+candidate IPs return a remote TLS `internal_error` alert after TCP success and
+no TLS candidate has succeeded. Both TLS and HTTP probes must be enabled.
+The same rule applies in Active and Passive modes; `0` disables early fallback.
+Timeouts, EOFs, and other TLS failures do not count toward this threshold.
+
+If HTTP succeeds, selection uses `[HTTP]` and respects `hosts_max_ips_per_domain`.
+Remaining TLS candidates stay unknown, so a later TLS-capable IP may be skipped.
+If HTTP fails, remaining TLS checks resume before final classification. The
+threshold resets for each fresh resolution; a later pass tries TLS again.

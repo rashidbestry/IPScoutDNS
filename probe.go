@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,8 +13,9 @@ import (
 )
 
 type tlsProbeResult struct {
-	tcpReachable bool
-	tlsReady     bool
+	tcpReachable  bool
+	tlsReady      bool
+	internalError bool // Remote TLS internal_error alert after TCP success.
 }
 
 type httpProbeResult struct {
@@ -93,9 +95,19 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsPr
 		logger.Printf("%s: TLS handshake %s failed after TCP success: %v", domain, ip, err)
 	}
 	return tlsProbeResult{
-		tcpReachable: true,
-		tlsReady:     err == nil,
+		tcpReachable:  true,
+		tlsReady:      err == nil,
+		internalError: isRemoteTLSInternalError(err),
 	}
+}
+
+func isRemoteTLSInternalError(err error) bool {
+	// crypto/tls represents received TCP alerts as net.OpError wrapping an
+	// unexported alert type. Check its operation and exact alert text, rather
+	// than matching arbitrary transport errors or the complete log message.
+	var remote *net.OpError
+	return errors.As(err, &remote) && remote.Op == "remote error" &&
+		remote.Err != nil && remote.Err.Error() == "tls: internal error"
 }
 
 func reachabilityContext(parent context.Context, cfg Config) (context.Context, context.CancelFunc) {

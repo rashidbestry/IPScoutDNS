@@ -146,6 +146,7 @@ func main() {
 		logger.Printf("\t- TCP/TLS/HTTP SOCKS5 proxy: %s", cfg.TLSSOCKS5Addr)
 	}
 	logger.Printf("\t- TCP/TLS/HTTP timeout: %s", cfg.TLSTimeout)
+	logger.Printf("\t- HTTP early fallback TLS alerts: %d (0 disables)", cfg.HTTPFallbackTLSAlerts)
 
 	// Startup/config logs always appear; only runtime console logs are optional.
 	logger.SetOutput(loggingOutput(os.Stdout, cfg.LogsEnabled, cfg.savedLog))

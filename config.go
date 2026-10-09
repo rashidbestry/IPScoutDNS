@@ -31,6 +31,7 @@ const (
 	defaultTLSRoute               = "direct"
 	defaultMaxParallel            = 16
 	defaultHostsMaxIPsPerDomain   = 8
+	defaultHTTPFallbackTLSAlerts  = 2
 	defaultAnswerTTL              = uint32(300)
 	defaultPassiveResolveInterval = 24 * time.Hour
 	defaultPassiveResolveParallel = 16
@@ -70,6 +71,7 @@ type Config struct {
 	TLSProbe               bool
 	ICMPProbe              bool
 	HTTPProbe              bool
+	HTTPFallbackTLSAlerts  int
 	MaxParallelTests       int
 	HostsMaxIPsPerDomain   int
 	LogsEnabled            bool
@@ -183,6 +185,9 @@ func (c Config) validateWithInterfaceValidator(validateInterface func(string) er
 	if c.HostsMaxIPsPerDomain < 0 {
 		return fmt.Errorf("hosts_max_ips_per_domain must be zero (unlimited) or greater")
 	}
+	if c.HTTPFallbackTLSAlerts < 0 {
+		return fmt.Errorf("http_fallback_tls_alerts must be zero (disabled) or greater")
+	}
 	if c.AnswerTTL <= 0 {
 		return fmt.Errorf("server.answer_ttl must be greater than zero")
 	}
@@ -290,6 +295,7 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 		TLSProbe:               true,
 		ICMPProbe:              true,
 		HTTPProbe:              true,
+		HTTPFallbackTLSAlerts:  defaultHTTPFallbackTLSAlerts,
 		MaxParallelTests:       defaultMaxParallel,
 		HostsMaxIPsPerDomain:   defaultHostsMaxIPsPerDomain,
 		LogsEnabled:            true,
@@ -554,6 +560,12 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 					return cfg, fmt.Errorf("%s:%d: invalid parallel_tests %q", path, lineNo, value)
 				}
 				cfg.MaxParallelTests = v
+			case "http_fallback_tls_alerts":
+				v, err := strconv.Atoi(value)
+				if err != nil || v < 0 {
+					return cfg, fmt.Errorf("%s:%d: invalid http_fallback_tls_alerts %q", path, lineNo, value)
+				}
+				cfg.HTTPFallbackTLSAlerts = v
 			case "hosts_max_ips_per_domain":
 				v, err := strconv.Atoi(value)
 				if err != nil || v < 0 {

@@ -232,7 +232,7 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	tlsPassed := func(result tlsProbeResult) bool {
 		return candidateProbePassed(cfg, result, httpProbeResult{}, false)
 	}
-	tlsResults, limitReached := runIPChecksLimited(ctx, ips, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain, func(ip string) tlsProbeResult {
+	tlsResults, limitReached, earlyHTTP := runTLSChecksWithHTTPFallback(ctx, ips, cfg, func(ip string) tlsProbeResult {
 		if cfg.TCPProbe || cfg.TLSProbe {
 			logger.Printf("%s: TCP/TLS testing %s", domain, ip)
 		}
@@ -269,7 +269,11 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	}
 	var httpResults map[string]httpProbeResult
 	if !domainReachable && cfg.HTTPProbe {
-		logger.Printf("%s: no TLS-ready IP; checking HTTP on port 80", domain)
+		if earlyHTTP {
+			logger.Printf("%s: remote TLS internal_error alert threshold reached (%d) with no TLS success; pausing remaining TLS checks and checking HTTP on port 80", domain, cfg.HTTPFallbackTLSAlerts)
+		} else {
+			logger.Printf("%s: no TLS-ready IP; checking HTTP on port 80", domain)
+		}
 		httpResults, limitReached = runIPChecksLimited(ctx, ips, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain, func(ip string) httpProbeResult {
 			return httpCheck(ctx, domain, ip, cfg)
 		}, func(result httpProbeResult) bool { return result.tcpReachable && result.httpReady })
@@ -284,6 +288,26 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 			}
 		}
 	}
+	if earlyHTTP && !domainReachable {
+		var remaining []string
+		for _, ip := range ips {
+			if _, checked := tlsResults[ip]; !checked {
+				remaining = append(remaining, ip)
+			}
+		}
+		logger.Printf("%s: early HTTP fallback failed; resuming TLS checks for %d candidates", domain, len(remaining))
+		resumed, reached := runIPChecksLimited(ctx, remaining, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain, checkTCPOrTLS, tlsPassed)
+		if ctx.Err() != nil {
+			return "", false, false
+		}
+		limitReached = reached
+		for ip, result := range resumed {
+			tlsResults[ip] = result
+			if result.tcpReachable && result.tlsReady {
+				domainReachable = true
+			}
+		}
+	}
 	var tcpFailed []string
 	for _, ip := range ips {
 		result, tlsChecked := tlsResults[ip]
@@ -294,7 +318,7 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		}
 		if result.tcpReachable || httpResults[ip].tcpReachable {
 			recordReachableIP(ip)
-		} else {
+		} else if tlsChecked || !(cfg.TCPProbe || cfg.TLSProbe) {
 			tcpFailed = append(tcpFailed, ip)
 		}
 	}
@@ -347,7 +371,7 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		if protocol != "" {
 			hostIPs = append(hostIPs, ip)
 		}
-		// HTTP is only probed when no candidate passes TLS, so TLS always wins.
+		// Early HTTP success leaves the untested TLS candidates unknown.
 		if protocol != "" && selectedIP == "" {
 			selectedIP = ip
 			selectedProtocol = protocol
@@ -504,6 +528,53 @@ func queryResolver(ctx context.Context, domain string, server string, throughSOC
 		return queryDNSSOCKS5(ctx, domain, cfg.DNSSOCKS5Addr, server)
 	}
 	return queryDNS(ctx, domain, server, cfg)
+}
+
+// Pause TLS only after matching alerts from distinct candidates and no TLS
+// successes. Smaller initial batches avoid launching a full worker pool before
+// the alert threshold can be evaluated. Once TLS succeeds, use the usual quota.
+func runTLSChecksWithHTTPFallback(ctx context.Context, ips []string, cfg Config, check func(string) tlsProbeResult, passed func(tlsProbeResult) bool) (map[string]tlsProbeResult, bool, bool) {
+	threshold := cfg.HTTPFallbackTLSAlerts
+	if !cfg.TLSProbe || !cfg.HTTPProbe || threshold <= 0 {
+		results, reached := runIPChecksLimited(ctx, ips, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain, check, passed)
+		return results, reached, false
+	}
+	parallel := cfg.MaxParallelTests
+	if parallel <= 0 {
+		parallel = defaultMaxParallel
+	}
+	results := make(map[string]tlsProbeResult)
+	successes, alerts := 0, 0
+	for start := 0; start < len(ips) && ctx.Err() == nil; {
+		size := min(parallel, len(ips)-start)
+		if cfg.HostsMaxIPsPerDomain > 0 {
+			size = min(size, cfg.HostsMaxIPsPerDomain-successes)
+		}
+		if start == 0 {
+			size = min(size, threshold)
+		}
+		batch := runIPChecks(ctx, ips[start:start+size], size, check)
+		for ip, result := range batch {
+			if _, seen := results[ip]; seen {
+				continue
+			}
+			results[ip] = result
+			if passed(result) {
+				successes++
+			}
+			if result.tcpReachable && result.internalError {
+				alerts++
+			}
+		}
+		start += size
+		if cfg.HostsMaxIPsPerDomain > 0 && successes >= cfg.HostsMaxIPsPerDomain {
+			return results, true, false
+		}
+		if successes == 0 && alerts >= threshold && start < len(ips) {
+			return results, false, true
+		}
+	}
+	return results, false, false
 }
 
 // Limit each batch to the remaining success quota. Even with a large worker

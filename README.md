@@ -90,3 +90,6 @@ If HTTP succeeds, selection uses `[HTTP]` and respects `hosts_max_ips_per_domain
 Remaining TLS candidates stay unknown, so a later TLS-capable IP may be skipped.
 If HTTP fails, remaining TLS checks resume before final classification. The
 threshold resets for each fresh resolution; a later pass tries TLS again.
+
+Check out FLOWCHART [FLOWCHART](FLOWCHART.md).
+

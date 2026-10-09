@@ -84,8 +84,10 @@ type Config struct {
 	ReachableIPsFile       string
 	UnreachableDomainsFile string
 	UnreachableIPsFile     string
-	outputDirectory        string // selected at startup, independent of the working directory
+	outputDirectory        string // selected at startup; regular Linux uses ./outputs
 	outputDirectoryShared  bool   // Windows stores outputs beside the executable
+	logDirectory           string // regular Linux uses ./logs; OpenWrt shares the runtime directory
+	runtimeCopiesEnabled   bool   // only enabled for OpenWrt package builds
 	savedLog               *savedLog
 	runtimeContext         context.Context // canceled when the service shuts down
 }

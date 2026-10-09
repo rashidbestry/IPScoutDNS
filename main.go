@@ -173,7 +173,10 @@ func main() {
 func logOtherConfigs(cfg Config) {
 	var modeSettings string
 	if cfg.Mode == "active" {
-		modeSettings = fmt.Sprintf("ttl=%s answer_ttl=%d active_copy_interval=%s active_log_copy_interval=%s", cfg.CacheTTL, cfg.AnswerTTL, cfg.ActiveCopyInterval, cfg.ActiveLogCopyInterval)
+		modeSettings = fmt.Sprintf("ttl=%s answer_ttl=%d", cfg.CacheTTL, cfg.AnswerTTL)
+		if cfg.runtimeCopiesEnabled {
+			modeSettings += fmt.Sprintf(" active_copy_interval=%s active_log_copy_interval=%s", cfg.ActiveCopyInterval, cfg.ActiveLogCopyInterval)
+		}
 	} else {
 		modeSettings = fmt.Sprintf("passive_resolve_time=%q passive_resolve_interval=%s passive_resolve_parallel=%d", cfg.PassiveResolveTime, cfg.PassiveResolveInterval, cfg.PassiveResolveParallel)
 	}
@@ -184,7 +187,7 @@ func logOtherConfigs(cfg Config) {
 
 func runActive(ctx context.Context, cfg Config) {
 	logCopiesDone := make(chan struct{})
-	if !cfg.SaveLogs || cfg.outputDirectoryShared || cfg.savedLog == nil {
+	if !cfg.SaveLogs || !cfg.runtimeCopiesEnabled || cfg.savedLog == nil {
 		close(logCopiesDone)
 	} else {
 		go func() {
@@ -195,7 +198,7 @@ func runActive(ctx context.Context, cfg Config) {
 		}()
 	}
 	copiesDone := make(chan struct{})
-	if cfg.outputDirectoryShared {
+	if !cfg.runtimeCopiesEnabled {
 		close(copiesDone)
 	} else {
 		go func() {

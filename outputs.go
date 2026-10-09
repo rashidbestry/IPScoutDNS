@@ -12,12 +12,15 @@ import (
 
 const (
 	openWrtOutputDirectory     = "/tmp/ipscoutdns"
-	linuxOutputDirectory       = "/temp/ipscoutdns"
+	linuxOutputDirectory       = "outputs"
 	outputDestinationDirectory = "/etc/ipscoutdns/outputs"
 	logDestinationDirectory    = "/etc/ipscoutdns/logs"
 )
 
-func runtimeOutputDirectoryWith(goos string, readFile func(string) ([]byte, error), executable func() (string, error)) (string, error) {
+// Set only by the OpenWrt package build, using -X main.openWrtPackage=true.
+var openWrtPackage = "false"
+
+func runtimeOutputDirectoryWith(goos string, packageBuild bool, executable func() (string, error)) (string, error) {
 	if goos == "windows" {
 		path, err := executable()
 		if err != nil {
@@ -25,40 +28,40 @@ func runtimeOutputDirectoryWith(goos string, readFile func(string) ([]byte, erro
 		}
 		return filepath.Dir(path), nil
 	}
-	if goos == "linux" {
-		if _, err := readFile("/etc/openwrt_release"); err == nil {
-			return openWrtOutputDirectory, nil
-		}
-		if data, err := readFile("/etc/os-release"); err == nil {
-			for _, line := range strings.Split(string(data), "\n") {
-				key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
-				if !ok || (key != "ID" && key != "ID_LIKE") {
-					continue
-				}
-				for _, id := range strings.Fields(strings.Trim(value, "\"'")) {
-					if id == "openwrt" {
-						return openWrtOutputDirectory, nil
-					}
-				}
-			}
-		}
+	if goos == "linux" && packageBuild {
+		return openWrtOutputDirectory, nil
 	}
 	return linuxOutputDirectory, nil
 }
 
 func prepareRuntimeOutputs(cfg *Config, configPath string) error {
-	dir, err := runtimeOutputDirectoryWith(runtime.GOOS, os.ReadFile, os.Executable)
+	return prepareRuntimeOutputsWith(cfg, configPath, runtime.GOOS, openWrtPackage == "true", os.Executable)
+}
+
+func prepareRuntimeOutputsWith(cfg *Config, configPath, goos string, packageBuild bool, executable func() (string, error)) error {
+	dir, err := runtimeOutputDirectoryWith(goos, packageBuild, executable)
 	if err != nil {
 		return err
 	}
-	if err := configureOutputPaths(cfg, dir, runtime.GOOS == "windows"); err != nil {
+	dir, err = filepath.Abs(dir)
+	if err != nil {
 		return err
+	}
+	if err := configureOutputPaths(cfg, dir, goos == "windows"); err != nil {
+		return err
+	}
+	cfg.runtimeCopiesEnabled = goos == "linux" && packageBuild
+	cfg.logDirectory = dir
+	if goos == "windows" {
+		cfg.logDirectory = filepath.Join(dir, "logs")
+	} else if !cfg.runtimeCopiesEnabled {
+		cfg.logDirectory = filepath.Join(filepath.Dir(dir), "logs")
 	}
 	// The Windows output directory also contains the tool and may contain inputs.
 	// Reject output filenames that would overwrite any of those files.
 	protected := []string{configPath, cfg.ActiveDomainsFile, cfg.PassiveDomainsFile}
-	if executable, err := os.Executable(); err == nil {
-		protected = append(protected, executable)
+	if path, err := executable(); err == nil {
+		protected = append(protected, path)
 	}
 	for _, output := range cfg.outputFiles() {
 		for _, input := range protected {
@@ -69,7 +72,7 @@ func prepareRuntimeOutputs(cfg *Config, configPath string) error {
 			if err != nil {
 				return err
 			}
-			if output == absolute || (runtime.GOOS == "windows" && strings.EqualFold(output, absolute)) {
+			if output == absolute || (goos == "windows" && strings.EqualFold(output, absolute)) {
 				return fmt.Errorf("output file %s conflicts with an input file or executable", output)
 			}
 		}
@@ -126,8 +129,8 @@ func (cfg Config) outputFiles() []string {
 }
 
 func copyRuntimeOutputs(ctx context.Context, cfg Config, destination string) error {
-	if cfg.outputDirectoryShared {
-		// Windows outputs are already usable beside the executable.
+	if !cfg.runtimeCopiesEnabled {
+		// Only OpenWrt packages archive runtime files under /etc/ipscoutdns.
 		return nil
 	}
 	count, err := copyOutputFiles(ctx, cfg.outputDirectory, destination)

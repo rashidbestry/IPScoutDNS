@@ -15,35 +15,86 @@ import (
 func TestRuntimeOutputDirectory(t *testing.T) {
 	executable := filepath.Join(t.TempDir(), "tool", "ipscoutdns.exe")
 	for _, test := range []struct {
-		name, goos, release, osRelease, want string
+		name, goos, want string
+		packageBuild     bool
 	}{
-		{"OpenWrt release", "linux", "DISTRIB_ID='OpenWrt'", "", openWrtOutputDirectory},
-		{"OpenWrt OS ID", "linux", "", "ID=\"openwrt\"\n", openWrtOutputDirectory},
-		{"OpenWrt derivative", "linux", "", "ID=router\nID_LIKE='linux openwrt'\n", openWrtOutputDirectory},
-		{"Linux", "linux", "", "ID=ubuntu\nID_LIKE=debian\n", linuxOutputDirectory},
-		{"Linux without release files", "linux", "", "", linuxOutputDirectory},
-		{"unrelated release name", "linux", "", "NAME=OpenWrt\nID=debian\n", linuxOutputDirectory},
-		{"Windows executable directory", "windows", "", "", filepath.Dir(executable)},
+		{"OpenWrt package", "linux", openWrtOutputDirectory, true},
+		{"Regular Linux", "linux", "outputs", false},
+		{"Windows executable directory", "windows", filepath.Dir(executable), false},
+		{"Windows ignores package marker", "windows", filepath.Dir(executable), true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			readFile := func(path string) ([]byte, error) {
-				if path == "/etc/openwrt_release" && test.release != "" {
-					return []byte(test.release), nil
-				}
-				if path == "/etc/os-release" && test.osRelease != "" {
-					return []byte(test.osRelease), nil
-				}
-				return nil, os.ErrNotExist
-			}
-			got, err := runtimeOutputDirectoryWith(test.goos, readFile, func() (string, error) { return executable, nil })
+			got, err := runtimeOutputDirectoryWith(test.goos, test.packageBuild, func() (string, error) { return executable, nil })
 			if err != nil || got != test.want {
 				t.Fatalf("directory = %q, error = %v, want %q", got, err, test.want)
 			}
 		})
 	}
-	_, err := runtimeOutputDirectoryWith("windows", nil, func() (string, error) { return "", errors.New("unavailable") })
+	_, err := runtimeOutputDirectoryWith("windows", false, func() (string, error) { return "", errors.New("unavailable") })
 	if err == nil {
 		t.Fatal("executable lookup failure was ignored")
+	}
+}
+
+func TestLinuxOutputsAndLogsStayInWorkingDirectory(t *testing.T) {
+	for _, mode := range []string{"active", "passive"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			t.Chdir(root)
+			cfg := Config{Mode: mode, SaveLogs: true, LogMaxSize: 3, LogKeepFiles: 2,
+				ReachableIPsFile: "old/reachable.ips"}
+			executable := func() (string, error) {
+				return filepath.Join(root, "tool", "ipscoutdns"), nil
+			}
+			if err := prepareRuntimeOutputsWith(&cfg, filepath.Join(root, "config", "ipscoutdns.conf"), "linux", false, executable); err != nil {
+				t.Fatal(err)
+			}
+			if cfg.outputDirectory != filepath.Join(root, "outputs") || cfg.logDirectory != filepath.Join(root, "logs") || cfg.runtimeCopiesEnabled || cfg.outputDirectoryShared {
+				t.Fatalf("Linux layout: outputs=%s logs=%s copies=%t shared=%t", cfg.outputDirectory, cfg.logDirectory, cfg.runtimeCopiesEnabled, cfg.outputDirectoryShared)
+			}
+			if err := os.MkdirAll(cfg.logDirectory, 0755); err != nil {
+				t.Fatal(err)
+			}
+			for _, stamp := range []string{"01", "02", "03"} {
+				if err := os.WriteFile(filepath.Join(cfg.logDirectory, "ipscoutdns_log_2026-10-"+stamp+"_00-00-00.txt"), []byte("old"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var err error
+			cfg.savedLog, err = openSavedLog(cfg, time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { cfg.savedLog.Close() })
+			if logs, err := listSavedLogs(cfg.logDirectory); err != nil || len(logs) != 2 {
+				t.Fatalf("startup retention: %v, error=%v", logs, err)
+			}
+			for _, record := range []string{"01\n", "02\n", "03\n", "04\n", "05\n"} {
+				writeLogRecord(t, cfg.savedLog, record)
+			}
+			if logs, err := listSavedLogs(cfg.logDirectory); err != nil || len(logs) != 2 {
+				t.Fatalf("local rotation retention: %v, error=%v", logs, err)
+			}
+			if err := os.WriteFile(cfg.ReachableIPsFile, []byte("1.1.1.1\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			destination := filepath.Join(root, "must-not-copy")
+			if err := copyRuntimeOutputs(context.Background(), cfg, filepath.Join(destination, "outputs")); err != nil {
+				t.Fatal(err)
+			}
+			if err := copyRuntimeLog(context.Background(), cfg, filepath.Join(destination, "logs")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(destination); !os.IsNotExist(err) {
+				t.Fatalf("Linux created an archive directory: %v", err)
+			}
+			if err := clearPassiveOutputDirectory(cfg.outputDirectory); err != nil {
+				t.Fatal(err)
+			}
+			if data, err := os.ReadFile(cfg.savedLog.path); err != nil || string(data) != "05\n" {
+				t.Fatalf("output cleanup affected logs: %q, error=%v", data, err)
+			}
+		})
 	}
 }
 
@@ -61,6 +112,7 @@ func TestRuntimeOutputFilesBothModes(t *testing.T) {
 				if err := configureOutputPaths(&cfg, dir, platform == "Windows"); err != nil {
 					t.Fatal(err)
 				}
+				cfg.runtimeCopiesEnabled = platform == "OpenWrt"
 				currentConfig = cfg
 				recordReachableHost("example.com", "1.1.1.1")
 				recordDomainUnreachable("failed.example")
@@ -79,9 +131,12 @@ func TestRuntimeOutputFilesBothModes(t *testing.T) {
 					t.Fatal(err)
 				}
 				copies, err := readOutputSnapshot(context.Background(), destination, nil)
-				if platform == "Windows" {
+				if platform != "OpenWrt" {
 					if err != nil || len(copies) != 0 {
-						t.Fatalf("Windows outputs were copied: %q, error = %v", copies, err)
+						t.Fatalf("%s outputs were copied: %q, error = %v", platform, copies, err)
+					}
+					if _, err := os.Stat(destination); !os.IsNotExist(err) {
+						t.Fatalf("%s copy created a destination: %v", platform, err)
 					}
 					return
 				}

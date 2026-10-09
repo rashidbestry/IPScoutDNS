@@ -39,8 +39,8 @@ jobs:
         run: python3 -B -m unittest discover -s packaging/openwrt -p "test_*.py"
       - name: Install SDK extraction dependency
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y zstd
-      - name: Build Linux ARM64 binary
-        run: go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/ipscoutdns" .
+      - name: Build OpenWrt ARM64 binary
+        run: go build -trimpath -ldflags="-s -w -X main.openWrtPackage=true" -o "$RUNNER_TEMP/ipscoutdns" .
         env:
           CGO_ENABLED: 0
           GOOS: linux

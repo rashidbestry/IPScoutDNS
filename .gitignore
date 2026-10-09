@@ -5,5 +5,7 @@
 *.md
 .venv
 .go-cache
+/outputs/
+/logs/
 !FLOWCHART.md
 __pycache__/

@@ -36,7 +36,9 @@ Edit [config/ipscoutdns.conf](config/ipscoutdns.conf) before starting. On OpenWr
 
 Domain-file paths resolve beside the config. The sample uses port 53; choose a free listener port.
 
-On Linux/OpenWrt, resolved files are copied to `/etc/ipscoutdns/outputs/` after passive passes or at `active_copy_interval` in active mode. Saved logs use `/etc/ipscoutdns/logs/`; Windows keeps files locally.
+Regular Linux writes output files to `./outputs/` and saved logs to `./logs/`, relative to the working directory, without copying. Windows keeps outputs beside the executable and saved logs in its `logs/` folder.
+
+Only OpenWrt package builds use `/tmp/ipscoutdns/` and copy outputs to `/etc/ipscoutdns/outputs/` after passive passes or at `active_copy_interval` in active mode. Saved logs are copied to `/etc/ipscoutdns/logs/` after passive passes, at `active_log_copy_interval` in active mode, and once more during a clean active shutdown. The package workflow builds with `-ldflags="-X main.openWrtPackage=true"`; ordinary Linux builds keep the local layout even when run on OpenWrt.
 
 **Windows:**
 

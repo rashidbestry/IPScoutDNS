@@ -26,7 +26,7 @@ type savedLog struct {
 	size            int64
 	maxSize         int64
 	keepFiles       int
-	shared          bool
+	copyRequired    bool
 	now             func() time.Time
 	copiedSizes     map[string]int64
 	copyDestination string
@@ -97,9 +97,12 @@ func openSavedLog(cfg Config, now time.Time) (*savedLog, error) {
 	if cfg.LogMaxSize <= 0 || cfg.LogKeepFiles <= 0 {
 		return nil, fmt.Errorf("log_max_size and log_keep_files must be greater than zero")
 	}
-	dir := cfg.outputDirectory
-	if cfg.outputDirectoryShared {
-		dir = filepath.Join(dir, "logs")
+	dir := cfg.logDirectory
+	if dir == "" {
+		dir = cfg.outputDirectory
+		if cfg.outputDirectoryShared {
+			dir = filepath.Join(dir, "logs")
+		}
 	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
@@ -112,13 +115,13 @@ func openSavedLog(cfg Config, now time.Time) (*savedLog, error) {
 		return nil, fmt.Errorf("%s must be a real log directory", dir)
 	}
 	l := &savedLog{dir: dir, maxSize: cfg.LogMaxSize, keepFiles: cfg.LogKeepFiles,
-		shared: cfg.outputDirectoryShared, now: time.Now, copiedSizes: make(map[string]int64)}
+		copyRequired: cfg.runtimeCopiesEnabled, now: time.Now, copiedSizes: make(map[string]int64)}
 	file, path, err := createSavedLog(dir, now)
 	if err != nil {
 		return nil, err
 	}
 	l.file, l.path = file, path
-	if l.shared {
+	if !l.copyRequired {
 		if err := l.pruneSourceLocked(); err != nil {
 			file.Close()
 			os.Remove(path)
@@ -188,7 +191,7 @@ func (l *savedLog) Write(p []byte) (int, error) {
 	}
 	n, err := l.file.Write(p)
 	l.size += int64(n)
-	if err == nil && rotated && l.shared {
+	if err == nil && rotated && !l.copyRequired {
 		err = l.pruneSourceLocked()
 	}
 	return n, err
@@ -321,11 +324,11 @@ func listSavedLogs(dir string) ([]savedLogEntry, error) {
 }
 
 // The active file counts toward retention and is protected even if the clock
-// moves backward. Linux/OpenWrt additionally protects any uncopied contents.
+// moves backward. OpenWrt packages additionally protect any uncopied contents.
 func (l *savedLog) pruneSourceLocked() error {
 	err := pruneSavedLogs(l.dir, l.keepFiles, filepath.Base(l.path), func(entry savedLogEntry) bool {
 		size, ok := l.copiedSizes[entry.name]
-		return l.shared || ok && size == entry.size
+		return !l.copyRequired || ok && size == entry.size
 	})
 	if err != nil {
 		return err
@@ -441,7 +444,7 @@ func finishLogging(cfg Config) {
 
 func finishLoggingWithCopy(cfg Config, console io.Writer, timeout time.Duration, copyLog func(context.Context) error) {
 	logger.Printf("IPScoutDNS stopped cleanly")
-	if cfg.Mode != "active" || !cfg.SaveLogs || cfg.outputDirectoryShared || cfg.savedLog == nil {
+	if cfg.Mode != "active" || !cfg.SaveLogs || !cfg.runtimeCopiesEnabled || cfg.savedLog == nil {
 		return
 	}
 
@@ -474,7 +477,7 @@ func loggingOutput(console io.Writer, enabled bool, file *savedLog) io.Writer {
 }
 
 func copyRuntimeLog(ctx context.Context, cfg Config, destination string) error {
-	if !cfg.SaveLogs || cfg.outputDirectoryShared || cfg.savedLog == nil {
+	if !cfg.SaveLogs || !cfg.runtimeCopiesEnabled || cfg.savedLog == nil {
 		return nil
 	}
 	count, err := cfg.savedLog.copyTo(ctx, destination)

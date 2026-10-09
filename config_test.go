@@ -365,9 +365,7 @@ func TestOpenWrtPackageConfig(t *testing.T) {
 	if !reflect.DeepEqual(cfg, expected) {
 		t.Fatalf("generated config lost or changed source settings:\ngot:  %+v\nwant: %+v", cfg, expected)
 	}
-	runtimeDir, err := runtimeOutputDirectoryWith("linux", func(string) ([]byte, error) {
-		return []byte("ID=openwrt\n"), nil
-	}, os.Executable)
+	runtimeDir, err := runtimeOutputDirectoryWith("linux", true, os.Executable)
 	if err != nil || runtimeDir != openWrtOutputDirectory {
 		t.Fatalf("OpenWrt runtime directory = %q, error = %v", runtimeDir, err)
 	}

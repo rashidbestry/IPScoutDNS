@@ -49,7 +49,7 @@ func TestLogRotationConfig(t *testing.T) {
 
 func rotationLog(t *testing.T, shared bool, size int64, keep int) Config {
 	t.Helper()
-	cfg := Config{SaveLogs: true, LogMaxSize: size, LogKeepFiles: keep, outputDirectory: t.TempDir(), outputDirectoryShared: shared}
+	cfg := Config{SaveLogs: true, LogMaxSize: size, LogKeepFiles: keep, outputDirectory: t.TempDir(), outputDirectoryShared: shared, runtimeCopiesEnabled: !shared}
 	now := time.Date(2026, 10, 7, 15, 30, 0, 0, time.UTC)
 	var err error
 	cfg.savedLog, err = openSavedLog(cfg, now)

@@ -195,7 +195,7 @@ func TestSaveLogsConfig(t *testing.T) {
 
 func testSavedLog(t *testing.T, shared bool) Config {
 	t.Helper()
-	cfg := Config{SaveLogs: true, LogMaxSize: defaultLogMaxSize, LogKeepFiles: defaultLogKeepFiles, outputDirectory: t.TempDir(), outputDirectoryShared: shared}
+	cfg := Config{SaveLogs: true, LogMaxSize: defaultLogMaxSize, LogKeepFiles: defaultLogKeepFiles, outputDirectory: t.TempDir(), outputDirectoryShared: shared, runtimeCopiesEnabled: !shared}
 	var err error
 	cfg.savedLog, err = openSavedLog(cfg, time.Date(2026, 10, 7, 15, 30, 0, 0, time.UTC))
 	if err != nil {
@@ -441,7 +441,7 @@ func TestFinalActiveLogCopyTimeoutPreservesFailure(t *testing.T) {
 }
 
 func TestFinalLogCopySkippedWhenNotNeeded(t *testing.T) {
-	for _, name := range []string{"passive", "windows", "saving disabled", "no saved log"} {
+	for _, name := range []string{"passive", "windows", "linux", "saving disabled", "no saved log"} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testSavedLog(t, false)
 			cfg.Mode, cfg.LogsEnabled = "active", true
@@ -450,6 +450,9 @@ func TestFinalLogCopySkippedWhenNotNeeded(t *testing.T) {
 				cfg.Mode = "passive"
 			case "windows":
 				cfg.outputDirectoryShared = true
+				cfg.runtimeCopiesEnabled = false
+			case "linux":
+				cfg.runtimeCopiesEnabled = false
 			case "saving disabled":
 				cfg.SaveLogs = false
 			case "no saved log":

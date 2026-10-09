@@ -26,70 +26,116 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build armv8 APK
+  prepare:
+    name: Validate and select OpenWrt architectures
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
-      - name: Test config generator
+      - name: Test packaging
         run: python3 -B -m unittest discover -s packaging/openwrt -p "test_*.py"
-      - name: Install SDK extraction dependency
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y zstd
-      - name: Build OpenWrt ARM64 binary
+      - name: Validate generated config
+        run: |
+          python3 packaging/openwrt/generate-config.py config/ipscoutdns.conf "$RUNNER_TEMP/openwrt.conf"
+          IPSCOUTDNS_OPENWRT_CONFIG="$RUNNER_TEMP/openwrt.conf" go test ./...
+      - name: Select CPU families
+        id: matrix
+        run: echo "matrix=$(python3 -B packaging/openwrt/build-packages.py --matrix)" >> "$GITHUB_OUTPUT"
+      - name: Snapshot current Mozilla roots for all architectures
+        run: curl --fail --location --silent --show-error https://curl.se/ca/cacert.pem -o "$RUNNER_TEMP/cacert.pem"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-ca-bundle
+          path: ${{ runner.temp }}/cacert.pem
+          if-no-files-found: error
+
+  build:
+    name: Package OpenWrt (${{ matrix.goarch }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: openwrt-ca-bundle
+          path: ${{ runner.temp }}/openwrt-ca
+      - name: Install packaging dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y zstd fakeroot
+      - name: Build static binary with conservative CPU requirements
         run: go build -trimpath -ldflags="-s -w -X main.openWrtPackage=true" -o "$RUNNER_TEMP/ipscoutdns" .
         env:
           CGO_ENABLED: 0
           GOOS: linux
-          GOARCH: arm64
-      - name: Download OpenWrt SDK
+          GOARCH: ${{ matrix.goarch }}
+          GO386: softfloat
+          GOAMD64: v1
+          GOARM: "5,softfloat"
+          GOARM64: v8.0
+          GOMIPS: softfloat
+          GOMIPS64: softfloat
+          GORISCV64: rva20u64
+      - name: Download native APK packager
         run: |
-          sdk_url="https://downloads.openwrt.org/releases/25.12.5/targets/rockchip/armv8/openwrt-sdk-25.12.5-rockchip-armv8_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+          # This x86 SDK supplies a host-side APK tool, not target binaries.
+          # IPKs use the traditional gzip/tar format for older opkg versions.
+          sdk_url="https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
           curl --fail --location --silent --show-error "$sdk_url" -o "$RUNNER_TEMP/openwrt-sdk.tar.zst"
+          echo "0c8df0151a1e88feb7c03d694d61f6a18d51872815b7c811d76e2b77504d5e9c  $RUNNER_TEMP/openwrt-sdk.tar.zst" | sha256sum --check
           mkdir -p "$RUNNER_TEMP/openwrt-sdk"
           tar --zstd -xf "$RUNNER_TEMP/openwrt-sdk.tar.zst" -C "$RUNNER_TEMP/openwrt-sdk" --strip-components=1
-      - name: Stage package and build with SDK
+      - name: Create IPKs, APKs and manual installation archive
         env:
           PACKAGE_VERSION: ${{ inputs.version }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
-          sdk_dir="$RUNNER_TEMP/openwrt-sdk"
-          package_dir="$sdk_dir/package/ipscoutdns"
-          mkdir -p "$package_dir"
-          cp -R packaging/openwrt/. "$package_dir/"
-          cp config/ipscoutdns.conf "$package_dir/files/ipscoutdns.conf"
-          cp config/active-domains.txt config/passive-domains.txt "$package_dir/files/"
-          cp "$RUNNER_TEMP/ipscoutdns" "$package_dir/files/ipscoutdns"
-
-          generated_config="$RUNNER_TEMP/ipscoutdns-openwrt.conf"
-          python3 "$package_dir/generate-config.py" "$package_dir/files/ipscoutdns.conf" "$generated_config" \
-            --active-domains-source "$package_dir/files/active-domains.txt" \
-            --active-domains-destination "$RUNNER_TEMP/ipscoutdns-active-domains.txt" \
-            --passive-domains-source "$package_dir/files/passive-domains.txt" \
-            --passive-domains-destination "$RUNNER_TEMP/ipscoutdns-passive-domains.txt"
-          IPSCOUTDNS_OPENWRT_CONFIG="$generated_config" go test ./...
-
-          version="$PACKAGE_VERSION"
-          if [ -z "$version" ]; then
-            version="0.0.1"
-          fi
-          version="${version#v}"
-
-          make -C "$sdk_dir" defconfig
-          make -C "$sdk_dir" package/ipscoutdns/compile V=s PKG_VERSION="$version"
-
-          package_file="$(find "$sdk_dir/bin/packages/aarch64_generic" -type f -name 'ipscoutdns*.apk' -print -quit)"
-          if [ -z "$package_file" ]; then
-            echo "OpenWrt SDK did not produce an APK under aarch64_generic" >&2
-            exit 1
-          fi
-
-          output="ipscoutdns-${version}-armv8-aarch64_generic.apk"
-          cp "$package_file" "$output"
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/openwrt-sdk/staging_dir/host/lib"
+          python3 -B packaging/openwrt/build-packages.py \
+            --binary "$RUNNER_TEMP/ipscoutdns" --goarch "$GOARCH" \
+            --version "$PACKAGE_VERSION" --output dist/openwrt \
+            --apk-tool "$RUNNER_TEMP/openwrt-sdk/staging_dir/host/bin/apk" --ca-bundle "$RUNNER_TEMP/openwrt-ca/cacert.pem"
       - uses: actions/upload-artifact@v4
         with:
-          name: ipscoutdns-openwrt-armv8-aarch64_generic
-          path: ipscoutdns-*.apk
+          name: ipscoutdns-openwrt-${{ matrix.goarch }}
+          path: dist/openwrt/ipscoutdns-*
           if-no-files-found: error
+
+  legacy-smoke:
+    name: OpenWrt ${{ matrix.firmware }} x86 compatibility
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        firmware: ["12.09", "14.07"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ipscoutdns-openwrt-386
+          path: legacy-packages
+      - name: Install emulator
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y qemu-system-x86 e2fsprogs
+      - name: Verify oldest baseline with its original kernel and opkg
+        run: |
+          packages=(legacy-packages/*-openwrt-x86.ipk)
+          test "${#packages[@]}" -eq 1
+          python3 -B packaging/openwrt/smoke-legacy.py --package "${packages[0]}" \
+            --firmware "${{ matrix.firmware }}" --memory 64 --log legacy-smoke.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: openwrt-${{ matrix.firmware }}-smoke-log
+          path: legacy-smoke.log

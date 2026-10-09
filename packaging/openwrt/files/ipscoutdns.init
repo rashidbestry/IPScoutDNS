@@ -1,13 +1,13 @@
 #!/bin/sh /etc/rc.common
 
-USE_PROCD=1
+[ -r /lib/functions/procd.sh ] && USE_PROCD=1
 START=95
 STOP=10
 
 PROG=/usr/bin/ipscoutdns
 CONFIG=/etc/ipscoutdns.conf
 
-start_service() {
+prepare_service() {
 	[ -x "$PROG" ] || {
 		echo "IPScoutDNS binary is missing or not executable: $PROG" >&2
 		return 1
@@ -17,8 +17,18 @@ start_service() {
 		return 1
 	}
 	mkdir -p /tmp/ipscoutdns || return 1
+	# Release packages carry roots for firmware without a certificate package.
+	# Preserve an explicitly configured certificate file.
+	if [ -z "$SSL_CERT_FILE" ] && [ -r /usr/share/ipscoutdns/ca-certificates.crt ]; then
+		export SSL_CERT_FILE=/usr/share/ipscoutdns/ca-certificates.crt
+	fi
+}
+
+start_service() {
+	prepare_service || return 1
 	procd_open_instance
 	procd_set_param command "$PROG" --config "$CONFIG"
+	[ -z "$SSL_CERT_FILE" ] || procd_set_param env SSL_CERT_FILE="$SSL_CERT_FILE"
 	# procd restarts the process on reload when these files change.
 	procd_set_param file "$CONFIG" /etc/ipscoutdns/active-domains.txt /etc/ipscoutdns/passive-domains.txt
 	procd_set_param respawn 3600 5 5
@@ -27,3 +37,22 @@ start_service() {
 	procd_set_param stderr 1
 	procd_close_instance
 }
+
+# OpenWrt 12.09 predates procd. Its rc.common uses these classic handlers;
+# procd firmware keeps the lifecycle and file-tracking behavior above.
+if [ "$USE_PROCD" != "1" ]; then
+	start() {
+		prepare_service || return 1
+		start-stop-daemon -S -b -x "$PROG" -- --config "$CONFIG"
+	}
+
+	stop() {
+		start-stop-daemon -K -x "$PROG" -s TERM
+	}
+
+	reload() {
+		stop
+		sleep 1
+		start
+	}
+fi

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Leave activation to the user: installation must not enable or start DNS.
+exit 0

@@ -8,4 +8,7 @@
 /outputs/
 /logs/
 !FLOWCHART.md
+!packaging/openwrt/README.md
 __pycache__/
+/dist/
+/.openwrt-validation/

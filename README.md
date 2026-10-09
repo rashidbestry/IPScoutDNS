@@ -1,7 +1,7 @@
 # IPScoutDNS
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![OpenWrt](https://img.shields.io/badge/OpenWrt-25.12.5-blue)](https://openwrt.org/)
+[![OpenWrt](https://img.shields.io/badge/OpenWrt-multiple_architectures-blue)](https://openwrt.org/)
 
 A DNS service for IPv4 (A) records, supporting plain DNS, DNS over HTTPS (DoH), and DNS over TLS (DoT). It offers TCP/TLS/HTTP/ICMP reachability checks and direct, interface-bound, or SOCKS5 routing. ICMP is disabled on proxy routes.
 
@@ -11,20 +11,34 @@ Download the package for your OS and architecture from [GitHub Releases](https:/
 
 ### OpenWrt
 
-The APK targets OpenWrt 25.12.5 `rockchip/armv8` (`aarch64_generic`). Replace `<version>` with the release version without its leading `v`:
+Releases include IPKs for opkg firmware, APKs for OpenWrt 25.12+, and manual-install archives for ten CPU families: x86, x86-64, ARM, ARM64, MIPS/MIPS64 in both byte orders, RISC-V64, and LoongArch64. Packages use architecture names rather than board families; `aarch64_generic` is usable beyond Rockchip.
+
+The oldest tested compatibility baseline is OpenWrt 12.09 on x86 with Linux 3.3.8. CI boots original 12.09 and 14.07 x86 images with 64 MiB RAM to check installation, DNS fallback, service start/stop, config preservation, and removal. Other CPU/firmware combinations require device testing; Linux 3.2+ and a supported CPU are required, and newer CPU families need firmware that supports their hardware. See [architecture names, requirements, and manual installation](packaging/openwrt/README.md).
+
+On opkg firmware, identify the device's architecture with `opkg print-architecture`. Set `ARCH` to the matching device architecture, such as `mips_24kc`, `mipsel_24kc`, `arm_cortex-a9`, `aarch64_cortex-a53`, or the legacy `x86`:
 
 ```sh
 VERSION="<version>"
-wget "https://github.com/rashidbestry/IPScoutDNS/releases/download/v${VERSION}/ipscoutdns-${VERSION}-rockchip-armv8-aarch64_generic.apk"
-apk add --allow-untrusted "./ipscoutdns-${VERSION}-rockchip-armv8-aarch64_generic.apk"
+ARCH="<device-architecture>"
+wget "https://github.com/rashidbestry/IPScoutDNS/releases/download/v${VERSION}/ipscoutdns-${VERSION}-openwrt-${ARCH}.ipk"
+opkg install "./ipscoutdns-${VERSION}-openwrt-${ARCH}.ipk"
 ```
 
-`--allow-untrusted` permits installation without a trusted package signature.
+On APK firmware, identify the architecture with `apk --print-arch`:
+
+```sh
+VERSION="<version>"
+ARCH="$(apk --print-arch)"
+wget "https://github.com/rashidbestry/IPScoutDNS/releases/download/v${VERSION}/ipscoutdns-${VERSION}-openwrt-${ARCH}.apk"
+apk add --allow-untrusted "./ipscoutdns-${VERSION}-openwrt-${ARCH}.apk"
+```
+
+`--allow-untrusted` permits installation without a trusted package signature. Avoid forcing a mismatched architecture; use the matching manual-install archive if the firmware's architecture name is not listed.
 
 ## Requirements
 
 - Prebuilt binaries do not require Go. Building from source requires the Go version in [go.mod](go.mod).
-- ICMP probing requires the system `ping` command. The OpenWrt package depends on `ca-bundle` for TLS.
+- ICMP probing requires the system `ping` command. OpenWrt releases include a current Mozilla CA bundle for TLS; keep the package and the router's clock current.
 - Memory and storage requirements depend on domain count, concurrency, and saved log limits.
 
 ## Run

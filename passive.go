@@ -97,7 +97,7 @@ func runPassive(ctx context.Context, cfg Config) error {
 		return clearPassiveOutputDirectory(cfg.outputDirectory)
 	}, func(ctx context.Context) error { return copyRuntimeOutputs(ctx, cfg, outputDestinationDirectory) },
 		func(ctx context.Context) error {
-			return copyRuntimeLog(ctx, cfg, filepath.Join(outputDestinationDirectory, "logs"))
+			return copyRuntimeLog(ctx, cfg, logDestinationDirectory)
 		})
 }
 

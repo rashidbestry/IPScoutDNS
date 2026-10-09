@@ -435,7 +435,7 @@ const finalActiveLogCopyTimeout = 5 * time.Second
 
 func finishLogging(cfg Config) {
 	finishLoggingWithCopy(cfg, os.Stdout, finalActiveLogCopyTimeout, func(ctx context.Context) error {
-		return copyRuntimeLog(ctx, cfg, filepath.Join(outputDestinationDirectory, "logs"))
+		return copyRuntimeLog(ctx, cfg, logDestinationDirectory)
 	})
 }
 

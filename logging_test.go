@@ -266,7 +266,8 @@ func TestSavedLogCopyAndPassiveCleanup(t *testing.T) {
 	if err := os.WriteFile(output, []byte("1.1.1.1\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	destination := t.TempDir()
+	archiveRoot := t.TempDir()
+	destination := filepath.Join(archiveRoot, "outputs")
 	if err := copyRuntimeOutputs(context.Background(), cfg, destination); err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +284,7 @@ func TestSavedLogCopyAndPassiveCleanup(t *testing.T) {
 	if _, err := os.Stat(output); !os.IsNotExist(err) {
 		t.Fatal("cleanup retained host output")
 	}
-	logDestination := filepath.Join(destination, "logs")
+	logDestination := filepath.Join(archiveRoot, "logs")
 	for _, line := range []string{"first pass\n", "second pass\n"} {
 		cfg.savedLog.Write([]byte(line))
 		if err := copyRuntimeLog(context.Background(), cfg, logDestination); err != nil {

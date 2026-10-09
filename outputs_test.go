@@ -74,7 +74,7 @@ func TestRuntimeOutputFilesBothModes(t *testing.T) {
 						t.Fatalf("output %q is outside %q", path, dir)
 					}
 				}
-				destination := t.TempDir()
+				destination := filepath.Join(t.TempDir(), "etc", "ipscoutdns", "outputs")
 				if err := copyRuntimeOutputs(context.Background(), cfg, destination); err != nil {
 					t.Fatal(err)
 				}
@@ -245,7 +245,7 @@ func TestCopyOutputFilesCreatesDestination(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "reachable.ips"), []byte("1.1.1.1\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	destination := filepath.Join(t.TempDir(), "etc", "ipscoutdns")
+	destination := filepath.Join(t.TempDir(), "etc", "ipscoutdns", "outputs")
 	if count, err := copyOutputFiles(context.Background(), source, destination); err != nil || count != 1 {
 		t.Fatalf("copied = %d, error = %v", count, err)
 	}

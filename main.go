@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
@@ -186,7 +185,7 @@ func runActive(ctx context.Context, cfg Config) {
 		go func() {
 			defer close(logCopiesDone)
 			runActiveLogCopies(ctx, cfg.ActiveLogCopyInterval, func(ctx context.Context) error {
-				return copyRuntimeLog(ctx, cfg, filepath.Join(outputDestinationDirectory, "logs"))
+				return copyRuntimeLog(ctx, cfg, logDestinationDirectory)
 			}, waitPassiveInterval)
 		}()
 	}

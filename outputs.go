@@ -13,7 +13,8 @@ import (
 const (
 	openWrtOutputDirectory     = "/tmp/ipscoutdns"
 	linuxOutputDirectory       = "/temp/ipscoutdns"
-	outputDestinationDirectory = "/etc/ipscoutdns"
+	outputDestinationDirectory = "/etc/ipscoutdns/outputs"
+	logDestinationDirectory    = "/etc/ipscoutdns/logs"
 )
 
 func runtimeOutputDirectoryWith(goos string, readFile func(string) ([]byte, error), executable func() (string, error)) (string, error) {

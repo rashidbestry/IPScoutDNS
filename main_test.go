@@ -27,7 +27,7 @@ func TestPassiveOutputLogIndentation(t *testing.T) {
 		"- config", "\t- mode: passive", "- output",
 		"\tpassive pass: 1 domains, up to 16 parallel resolves",
 		"\texample.com: WORKING IP = 1.1.1.1 [TLS]",
-		"\tcopied 3 output files from /tmp/ipscoutdns to /etc/ipscoutdns",
+		"\tcopied 3 output files from /tmp/ipscoutdns to /etc/ipscoutdns/outputs",
 		"\tpassive pass complete; next pass in 24h0m0s",
 	}
 	lines := strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n")

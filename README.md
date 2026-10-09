@@ -36,6 +36,8 @@ Edit [config/ipscoutdns.conf](config/ipscoutdns.conf) before starting. On OpenWr
 
 Domain-file paths resolve beside the config. The sample uses port 53; choose a free listener port.
 
+On Linux/OpenWrt, resolved files are copied to `/etc/ipscoutdns/outputs/` after passive passes or at `active_copy_interval` in active mode. Saved logs use `/etc/ipscoutdns/logs/`; Windows keeps files locally.
+
 **Windows:**
 
 ```powershell

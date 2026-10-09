@@ -22,7 +22,7 @@ func TestDNSQueryParallelConfig(t *testing.T) {
 				content += "dns_query_parallel=" + value + "\n"
 			}
 			cfg, err := loadConfig(writeModeTestFile(t, content))
-			if value == "0" || value == "-1" || value == "invalid" {
+			if value == "-1" || value == "invalid" {
 				if err == nil || !strings.Contains(err.Error(), "invalid dns_query_parallel") {
 					t.Fatalf("error = %v, want invalid dns_query_parallel", err)
 				}
@@ -39,18 +39,30 @@ func TestDNSQueryParallelConfig(t *testing.T) {
 				t.Fatalf("parallel = %d, want %d", cfg.DNSQueryParallel, want)
 			}
 			cfg.DNSQueryParallel = 0
+			if err := cfg.validate(); err != nil {
+				t.Fatalf("validation rejected unlimited parallelism: %v", err)
+			}
+			cfg.DNSQueryParallel = -1
 			if err := cfg.validate(); err == nil {
-				t.Fatal("validation accepted zero parallelism")
+				t.Fatal("validation accepted negative parallelism")
 			}
 		})
 	}
 }
 
 func TestDNSQueryLimitSharedAcrossModesAndRoutes(t *testing.T) {
+	for _, limit := range []int{2, 0} {
+		t.Run(fmt.Sprintf("limit=%d", limit), func(t *testing.T) {
+			testDNSQueryLimitSharedAcrossModesAndRoutes(t, limit)
+		})
+	}
+}
+
+func testDNSQueryLimitSharedAcrossModesAndRoutes(t *testing.T, limit int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cfg := Config{DirectDNS: []string{"direct1", "direct2"}, ProxyDNS: []string{"proxy1", "proxy2"},
-		DNSSOCKS5Addr: "127.0.0.1:1080", DNSQueryParallel: 2, DNSTimeout: 2 * time.Second,
+		DNSSOCKS5Addr: "127.0.0.1:1080", DNSQueryParallel: limit, DNSTimeout: 2 * time.Second,
 		TLSProbe: true, MaxParallelTests: 1, runtimeContext: ctx}
 	var active, peak, calls, proxyCalls atomic.Int32
 	started := make(chan string, 8)
@@ -94,16 +106,20 @@ func TestDNSQueryLimitSharedAcrossModesAndRoutes(t *testing.T) {
 			done <- struct{}{}
 		}(mode)
 	}
-	for i := 0; i < 2; i++ {
+	wantPeak := limit
+	if limit == 0 {
+		wantPeak = 8
+	}
+	for i := 0; i < wantPeak; i++ {
 		select {
 		case <-started:
 		case <-ctx.Done():
-			t.Fatal("two queries did not start")
+			t.Fatalf("%d concurrent queries did not start", wantPeak)
 		}
 	}
 	select {
 	case extra := <-started:
-		t.Errorf("extra query started while both global slots were occupied: %s", extra)
+		t.Errorf("extra query started beyond expected concurrency %d: %s", wantPeak, extra)
 	case <-time.After(40 * time.Millisecond):
 	}
 	unblock()
@@ -114,8 +130,8 @@ func TestDNSQueryLimitSharedAcrossModesAndRoutes(t *testing.T) {
 			t.Fatal("domain queries did not complete")
 		}
 	}
-	if peak.Load() != 2 || calls.Load() != 8 || proxyCalls.Load() != 4 {
-		t.Fatalf("peak=%d calls=%d proxy calls=%d, want 2/8/4", peak.Load(), calls.Load(), proxyCalls.Load())
+	if peak.Load() != int32(wantPeak) || calls.Load() != 8 || proxyCalls.Load() != 4 {
+		t.Fatalf("peak=%d calls=%d proxy calls=%d, want %d/8/4", peak.Load(), calls.Load(), proxyCalls.Load(), wantPeak)
 	}
 }
 

@@ -136,7 +136,11 @@ func main() {
 		logger.Printf("\t- DNS SOCKS5 proxy: %s", cfg.DNSSOCKS5Addr)
 	}
 	logger.Printf("\t- DNS timeout: %s", cfg.DNSTimeout)
-	logger.Printf("\t- DNS query parallel: %d (global)", cfg.DNSQueryParallel)
+	if cfg.DNSQueryParallel == 0 {
+		logger.Printf("\t- DNS query parallel: unlimited (global)")
+	} else {
+		logger.Printf("\t- DNS query parallel: %d (global)", cfg.DNSQueryParallel)
+	}
 	logger.Printf("")
 	logger.Printf("\t- TCP/TLS/HTTP port: %d/80", cfg.TLSPort)
 	logger.Printf("\t- TCP/TLS/HTTP/ICMP route: %s", cfg.TLSRoute)

@@ -62,6 +62,7 @@ On Linux/OpenWrt, resolved files are copied to `/etc/ipscoutdns/outputs/` after 
 `dns_query_parallel=4` limits concurrent upstream DNS queries across the entire
 service in both Active and Passive modes. Direct DNS, SOCKS5 DNS, DoH, and Active
 fallback queries share this limit. Additional queries wait for a slot;
+set `dns_query_parallel=0` for unlimited concurrent upstream DNS queries.
 `passive_resolve_parallel` controls domain jobs and `parallel_tests` controls
 candidate-IP probes separately.
 

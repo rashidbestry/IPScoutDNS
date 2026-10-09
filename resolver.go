@@ -102,7 +102,7 @@ type resolverTarget struct {
 }
 
 // One gate is shared by all domains, modes, and fallback requests. Its zero
-// value is ready for use; a zero limit in internal callers uses the default.
+// value is ready for use; a zero limit allows unlimited concurrent queries.
 type dnsQueryLimiter struct {
 	mu      sync.Mutex
 	active  int
@@ -112,7 +112,7 @@ type dnsQueryLimiter struct {
 var upstreamDNSQueries dnsQueryLimiter
 
 func (l *dnsQueryLimiter) acquire(ctx context.Context, limit int) error {
-	if limit <= 0 {
+	if limit < 0 {
 		limit = defaultDNSQueryParallel
 	}
 	l.mu.Lock()
@@ -121,7 +121,7 @@ func (l *dnsQueryLimiter) acquire(ctx context.Context, limit int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if l.active < limit {
+		if limit == 0 || l.active < limit {
 			l.active++
 			return nil
 		}

@@ -164,8 +164,8 @@ func (c Config) validateWithInterfaceValidator(validateInterface func(string) er
 	if c.DNSTimeout <= 0 {
 		return fmt.Errorf("server.dns_timeout must be greater than zero")
 	}
-	if c.DNSQueryParallel <= 0 {
-		return fmt.Errorf("dns_query_parallel must be greater than zero")
+	if c.DNSQueryParallel < 0 {
+		return fmt.Errorf("dns_query_parallel must be zero or greater")
 	}
 	if c.TLSTimeout <= 0 {
 		return fmt.Errorf("server.tcp_timeout must be greater than zero")
@@ -550,7 +550,7 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 				rawDNSProxyPort = value
 			case "dns_query_parallel":
 				v, err := strconv.Atoi(value)
-				if err != nil || v <= 0 {
+				if err != nil || v < 0 {
 					return cfg, fmt.Errorf("%s:%d: invalid dns_query_parallel %q", path, lineNo, value)
 				}
 				cfg.DNSQueryParallel = v

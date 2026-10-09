@@ -138,9 +138,9 @@ def build_ipk(root, control, version, architecture, output, epoch):
         "Maintainer: IPScoutDNS contributors\nSection: net\nLicense: MIT\n"
         "Description: DNS filtering and reachability service\n"
         f"Installed-Size: {installed_size}\n",
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
-    (control / "conffiles").write_text("\n".join(CONFFILES) + "\n", encoding="utf-8")
+    (control / "conffiles").write_text("\n".join(CONFFILES) + "\n", encoding="utf-8", newline="\n")
     for hook in ("postinst", "prerm"):
         shutil.copyfile(HERE / "files" / hook, control / hook)
         (control / hook).chmod(0o755)
@@ -157,10 +157,10 @@ def build_ipk(root, control, version, architecture, output, epoch):
 def build_apk(root, version, architecture, output, apk_tool):
     metadata = root / "lib/apk/packages"
     metadata.mkdir(parents=True, exist_ok=True)
-    (metadata / "ipscoutdns.conffiles").write_text("\n".join(CONFFILES) + "\n", encoding="utf-8")
+    (metadata / "ipscoutdns.conffiles").write_text("\n".join(CONFFILES) + "\n", encoding="utf-8", newline="\n")
     (metadata / "ipscoutdns.conffiles_static").write_text(
         "".join(f"{name} {hashlib.sha256((root / name.lstrip('/')).read_bytes()).hexdigest()}\n"
-                for name in CONFFILES), encoding="utf-8",
+                for name in CONFFILES), encoding="utf-8", newline="\n",
     )
     # fakeroot gives all files root ownership in the native APK v3 payload.
     environment = os.environ.copy()

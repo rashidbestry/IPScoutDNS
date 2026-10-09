@@ -7,6 +7,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SPEC = importlib.util.spec_from_file_location("build_packages", Path(__file__).with_name("build-packages.py"))
@@ -74,11 +75,13 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual(outer.extractfile("./debian-binary").read(), b"2.0\n")
                 with tarfile.open(fileobj=io.BytesIO(outer.extractfile("./control.tar.gz").read()), mode="r:gz") as control:
                     metadata = control.extractfile("./control").read().decode()
+                    self.assertNotIn("\r", metadata)
                     self.assertIn("Architecture: x86\n", metadata)
                     self.assertIn("Version: 1.2.3-1\n", metadata)
                     self.assertNotIn("Depends:", metadata)
                     self.assertNotIn("libc", metadata)
-                    self.assertEqual(control.extractfile("./conffiles").read().decode().splitlines(), list(builder.CONFFILES))
+                    self.assertEqual(control.extractfile("./conffiles").read(),
+                                     ("\n".join(builder.CONFFILES) + "\n").encode())
                     self.assertEqual(control.getmember("./postinst").mode, 0o755)
                     hook_commands = [line for line in control.extractfile("./postinst").read().splitlines()
                                      if line and not line.startswith(b"#")]
@@ -102,6 +105,29 @@ class PackageTests(unittest.TestCase):
             self.assertIn(architecture, targets[goarch]["ipk"])
             self.assertNotIn(architecture, targets[goarch]["apk"])
         self.assertIn("aarch64_cortex-a53", targets["arm64"]["apk"])
+
+    def test_apk_conffile_metadata_uses_unix_line_endings(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            binary = work / "binary"
+            binary.write_bytes(elf_header("amd64"))
+            ca_bundle = work / "ca.pem"
+            ca_bundle.write_bytes(b"test roots\n")
+            root = work / "root"
+            builder.stage_files(root, binary, ca_bundle)
+            # Inspect metadata without requiring the Linux SDK tools on Windows.
+            with mock.patch.object(builder.subprocess, "run"), mock.patch.object(
+                builder.subprocess, "check_output", return_value="  arch: x86_64\n"
+            ):
+                builder.build_apk(root, "1.2.3", "x86_64", work / "test.apk", work / "bin/apk")
+            metadata = root / "lib/apk/packages"
+            self.assertEqual((metadata / "ipscoutdns.conffiles").read_bytes(),
+                             ("\n".join(builder.CONFFILES) + "\n").encode())
+            expected_hashes = "".join(
+                f"{name} {builder.hashlib.sha256((root / name.lstrip('/')).read_bytes()).hexdigest()}\n"
+                for name in builder.CONFFILES
+            ).encode()
+            self.assertEqual((metadata / "ipscoutdns.conffiles_static").read_bytes(), expected_hashes)
 
 
 if __name__ == "__main__":

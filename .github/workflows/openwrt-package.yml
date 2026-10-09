@@ -101,7 +101,8 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
-          export LD_LIBRARY_PATH="$RUNNER_TEMP/openwrt-sdk/staging_dir/host/lib"
+          # SDK wrappers select their own loader/libraries; keep host Python
+          # and shell utilities on the runner's system libraries.
           python3 -B packaging/openwrt/build-packages.py \
             --binary "$RUNNER_TEMP/ipscoutdns" --goarch "$GOARCH" \
             --version "$PACKAGE_VERSION" --output dist/openwrt \

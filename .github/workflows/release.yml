@@ -73,7 +73,10 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: release-assets/*
+          files: |
+            release-assets/*.tar.gz
+            release-assets/*.zip
+            release-assets/*.apk
 
   openwrt-package:
     uses: ./.github/workflows/openwrt-package.yml

@@ -44,8 +44,6 @@ func handleDNSWith(w dns.ResponseWriter, req *dns.Msg, resolve func(string, Conf
 		return
 	}
 
-	logger.Printf("request: %s [A] from %s", domain, w.RemoteAddr())
-
 	if !isDomainAllowed(domain) {
 		logger.Printf("%s: domain not in allowed list, forwarding to fallback", domain)
 		forwardDNS(w, req, currentConfig.FallbackDNS)
@@ -79,16 +77,17 @@ func handleDNSWith(w dns.ResponseWriter, req *dns.Msg, resolve func(string, Conf
 		return
 	}
 
-	logger.Printf("%s: NO WORKING IP FOUND - DNS fallback", domain)
 	forwardDNS(w, req, currentConfig.FallbackDNS)
 }
 
 func resolveAndSelect(domain string, cfg Config) (string, bool) {
-	return resolveAndSelectWith(domain, cfg, queryResolver, testTLS, pingProbe(dnsServiceContext(cfg), cfg))
+	ip, ok, _ := resolveAndSelectStatus(domain, cfg)
+	return ip, ok
 }
 
 func resolveAndSelectStatus(domain string, cfg Config) (string, bool, bool) {
-	return resolveAndSelectWithStatus(domain, cfg, queryResolver, testTLS, pingProbe(dnsServiceContext(cfg), cfg))
+	ctx := compactProbeContext(dnsServiceContext(cfg))
+	return resolveAndSelectWithProbes(ctx, domain, cfg, queryResolver, testTLS, testHTTP, pingProbe(ctx, cfg))
 }
 
 type resolverQueryFunc func(context.Context, string, string, bool, Config) []string
@@ -181,15 +180,17 @@ func resolveAndSelectWithContext(ctx context.Context, domain string, cfg Config,
 }
 
 func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, httpCheck httpProbeFunc, pingCheck icmpProbeFunc) (string, bool, bool) {
+	ctx = compactProbeContext(ctx)
+	cfg.runtimeContext = ctx
 	if !cfg.TCPProbe && !cfg.TLSProbe && !cfg.HTTPProbe && !cfg.ICMPProbe {
-		logger.Printf("%s: all reachability probes disabled; keeping previous status", domain)
+		logDomainResult(domain, 0, 0, "", "", cfg, nil, nil, nil, "probes disabled; previous status kept")
 		return "", false, false
 	}
 	if cfg.CacheTTL > 0 {
 		if entry, ok := getCache(domain); ok {
 			if time.Since(entry.Checked) < cfg.CacheTTL {
 				if cachedIP, valid := normalizeIPv4Candidate(entry.IP); valid {
-					logger.Printf("%s: CACHE HIT = %s [%s]", domain, cachedIP, entry.Protocol)
+					logger.Printf("- %s: CACHE HIT = %s [%s]", domain, cachedIP, entry.Protocol)
 					if cfg.HostsMaxIPsPerDomain > 0 {
 						updateReachableHosts(domain, []string{cachedIP}, cfg.HostsMaxIPsPerDomain, true)
 						recordReachableDomain(domain)
@@ -211,13 +212,9 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	if len(ips) == 0 {
 		// Without a candidate IP, no reachability probe was possible. Preserve
 		// the previous status rather than treating a DNS failure as a TCP failure.
-		logger.Printf("%s: no resolver returned IPv4 addresses; domain reachability unknown, keeping previous status", domain)
+		logDomainResult(domain, 0, 0, "", "", cfg, nil, nil, nil, "no IPv4 candidates; previous status kept")
 		return "", false, false
 	}
-	logger.Printf("%s: collected %d unique IPv4 candidates", domain, len(ips))
-	// Combine identical connection failures across this domain's retry rounds.
-	ctx = context.WithValue(ctx, deferTCPFailureLogsKey{}, true)
-
 	checkTCPOrTLS := func(ip string) tlsProbeResult {
 		if cfg.TLSProbe {
 			return tlsCheck(ctx, domain, ip, cfg)
@@ -243,8 +240,6 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	if ctx.Err() != nil {
 		return "", false, false
 	}
-	firstTLSResults := tlsResults
-	var retryTLSResults map[string]tlsProbeResult
 	anyTCPReachable := false
 	for _, result := range tlsResults {
 		if result.tcpReachable {
@@ -255,16 +250,13 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	if !anyTCPReachable && (cfg.TCPProbe || cfg.TLSProbe) {
 		// Confirm a completely failed probe round before changing domain status.
 		// Retry only on total TCP failure, using the same timeout and worker limit.
-		logger.Printf("%s: all TCP probes failed; retrying once before classifying domain", domain)
 		tlsResults, limitReached = runIPChecksLimited(ctx, ips, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain, func(ip string) tlsProbeResult {
 			return checkTCPOrTLS(ip)
 		}, tlsPassed)
 		if ctx.Err() != nil {
 			return "", false, false
 		}
-		retryTLSResults = tlsResults
 	}
-	logTCPProbeResults(domain, ips, cfg, firstTLSResults, retryTLSResults)
 
 	domainReachable := false
 	for _, result := range tlsResults {
@@ -275,20 +267,14 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	}
 	var httpResults map[string]httpProbeResult
 	if !domainReachable && cfg.HTTPProbe {
-		if earlyHTTP {
-			logger.Printf("%s: remote TLS internal_error alert threshold reached (%d) with no TLS success; pausing remaining TLS checks and checking HTTP on port 80", domain, cfg.HTTPFallbackTLSAlerts)
-		} else {
-			logger.Printf("%s: no TLS-ready IP; checking HTTP on port 80", domain)
-		}
 		httpResults, limitReached = runIPChecksLimited(ctx, ips, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain, func(ip string) httpProbeResult {
 			return httpCheck(ctx, domain, ip, cfg)
 		}, func(result httpProbeResult) bool { return result.tcpReachable && result.httpReady })
 		if ctx.Err() != nil {
 			return "", false, false
 		}
-		for ip, result := range httpResults {
+		for _, result := range httpResults {
 			if result.tcpReachable && result.httpReady {
-				logger.Printf("%s: HTTP reachable at %s:80", domain, ip)
 				domainReachable = true
 				break
 			}
@@ -301,12 +287,10 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 				remaining = append(remaining, ip)
 			}
 		}
-		logger.Printf("%s: early HTTP fallback failed; resuming TLS checks for %d candidates", domain, len(remaining))
 		resumed, reached := runIPChecksLimited(ctx, remaining, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain, checkTCPOrTLS, tlsPassed)
 		if ctx.Err() != nil {
 			return "", false, false
 		}
-		logTCPProbeResults(domain, remaining, cfg, resumed, nil)
 		limitReached = reached
 		for ip, result := range resumed {
 			tlsResults[ip] = result
@@ -367,9 +351,6 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		recordDomainUnreachable(domain)
 	}
 
-	if limitReached {
-		logger.Printf("%s: reached %d successful IPs; skipping remaining probes", domain, cfg.HostsMaxIPsPerDomain)
-	}
 	selectedIP, selectedProtocol := "", ""
 	var hostIPs []string
 	for _, ip := range ips {
@@ -401,8 +382,8 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		if cfg.Mode != "passive" {
 			updateCache(domain, selectedIP, selectedProtocol)
 		}
-		logger.Printf("%s: WORKING IP = %s [%s]", domain, selectedIP, selectedProtocol)
 	}
+	logDomainResult(domain, len(ips), len(hostIPs), selectedIP, selectedProtocol, cfg, tlsResults, httpResults, icmpResults, "")
 	return selectedIP, selectedIP != "", false
 }
 
@@ -457,7 +438,7 @@ func collectResolverIPsWithContext(parent context.Context, domain string, cfg Co
 		targets = filtered
 	}
 	if len(targets) == 0 {
-		logger.Printf("%s: proxy DNS configured but SOCKS5 address is empty", domain)
+		logUnlessCanceled(parent, "%s: proxy DNS configured but SOCKS5 address is empty", domain)
 		return nil
 	}
 
@@ -502,7 +483,7 @@ func collectResolverIPsWithContext(parent context.Context, domain string, cfg Co
 		for _, value := range result.values {
 			ip, valid := normalizeIPv4Candidate(value)
 			if !valid {
-				logger.Printf("%s: resolver %s returned unsuitable IPv4 candidate %q; discarded (proxy=%t)", domain, result.target.server, value, result.target.throughSOCKS)
+				logUnlessCanceled(ctx, "%s: resolver %s returned unsuitable IPv4 candidate %q; discarded (proxy=%t)", domain, result.target.server, value, result.target.throughSOCKS)
 				continue
 			}
 			if seen[ip] {
@@ -524,7 +505,7 @@ func queryResolver(ctx context.Context, domain string, server string, throughSOC
 		if throughSOCKS {
 			return queryDoHSOCKS5(ctx, domain, server, cfg.DNSSOCKS5Addr)
 		}
-		logger.Printf("%s: ignoring DoH resolver in direct DNS section: %s", domain, server)
+		logUnlessCanceled(ctx, "%s: ignoring DoH resolver in direct DNS section: %s", domain, server)
 		return nil
 	}
 	if _, _, err := net.SplitHostPort(server); err != nil {
@@ -674,7 +655,7 @@ func queryDNS(ctx context.Context, domain string, server string, cfg Config) []s
 
 	client, err := newDNSClient(timeout, cfg.DirectDNSInterface, server)
 	if err != nil {
-		logger.Printf("%s: DNS %s invalid interface selection: %v", domain, server, err)
+		logUnlessCanceled(ctx, "%s: DNS %s invalid interface selection: %v", domain, server, err)
 		return nil
 	}
 	conn, err := client.DialContext(ctx, server)
@@ -691,7 +672,7 @@ func queryDNS(ctx context.Context, domain string, server string, cfg Config) []s
 		return nil
 	}
 
-	return resolverIPv4Response(domain, server, resp)
+	return resolverIPv4ResponseWithContext(ctx, domain, server, resp)
 }
 
 func queryDNSSOCKS5(ctx context.Context, domain, socksAddr, dnsAddr string) []string {
@@ -735,7 +716,7 @@ func queryDNSSOCKS5(ctx context.Context, domain, socksAddr, dnsAddr string) []st
 
 	n := int(binary.BigEndian.Uint16(length[:]))
 	if n <= 0 || n > 65535 {
-		logger.Printf("%s: SOCKS5 DNS %s returned invalid message length %d", domain, dnsAddr, n)
+		logUnlessCanceled(ctx, "%s: SOCKS5 DNS %s returned invalid message length %d", domain, dnsAddr, n)
 		return nil
 	}
 	respWire := make([]byte, n)
@@ -747,7 +728,7 @@ func queryDNSSOCKS5(ctx context.Context, domain, socksAddr, dnsAddr string) []st
 	if err := resp.Unpack(respWire); err != nil {
 		return fail("response decoding", err)
 	}
-	return resolverIPv4Response(domain, dnsAddr, resp)
+	return resolverIPv4ResponseWithContext(ctx, domain, dnsAddr, resp)
 }
 
 func queryDoHSOCKS5(ctx context.Context, domain, endpoint, socksAddr string) []string {
@@ -756,13 +737,13 @@ func queryDoHSOCKS5(ctx context.Context, domain, endpoint, socksAddr string) []s
 	msg.RecursionDesired = true
 	wire, err := msg.Pack()
 	if err != nil {
-		logger.Printf("%s: SOCKS5 DoH %s request encoding failed: %v", domain, endpoint, err)
+		logUnlessCanceled(ctx, "%s: SOCKS5 DoH %s request encoding failed: %v", domain, endpoint, err)
 		return nil
 	}
 
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Scheme != "https" || u.Host == "" {
-		logger.Printf("%s: invalid DoH endpoint: %s", domain, endpoint)
+		logUnlessCanceled(ctx, "%s: invalid DoH endpoint: %s", domain, endpoint)
 		return nil
 	}
 
@@ -783,7 +764,7 @@ func queryDoHSOCKS5(ctx context.Context, domain, endpoint, socksAddr string) []s
 	client := &http.Client{Transport: transport, Timeout: timeout}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(wire))
 	if err != nil {
-		logger.Printf("%s: SOCKS5 DoH %s request creation failed: %v", domain, endpoint, err)
+		logUnlessCanceled(ctx, "%s: SOCKS5 DoH %s request creation failed: %v", domain, endpoint, err)
 		return nil
 	}
 	req.Header.Set("Content-Type", "application/dns-message")
@@ -800,7 +781,7 @@ func queryDoHSOCKS5(ctx context.Context, domain, endpoint, socksAddr string) []s
 func readDoHResponse(ctx context.Context, domain, endpoint string, resp *http.Response) []string {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		logger.Printf("%s: SOCKS5 DoH %s returned HTTP %s", domain, endpoint, resp.Status)
+		logUnlessCanceled(ctx, "%s: SOCKS5 DoH %s returned HTTP %s", domain, endpoint, resp.Status)
 		return nil
 	}
 
@@ -811,19 +792,23 @@ func readDoHResponse(ctx context.Context, domain, endpoint string, resp *http.Re
 	}
 	msgResp := new(dns.Msg)
 	if err := msgResp.Unpack(respWire); err != nil {
-		logger.Printf("%s: SOCKS5 DoH %s invalid DNS response (Content-Type=%q): %v", domain, endpoint, resp.Header.Get("Content-Type"), err)
+		logUnlessCanceled(ctx, "%s: SOCKS5 DoH %s invalid DNS response (Content-Type=%q): %v", domain, endpoint, resp.Header.Get("Content-Type"), err)
 		return nil
 	}
-	return resolverIPv4Response(domain, endpoint, msgResp)
+	return resolverIPv4ResponseWithContext(ctx, domain, endpoint, msgResp)
 }
 
 func resolverIPv4Response(domain, server string, resp *dns.Msg) []string {
+	return resolverIPv4ResponseWithContext(context.Background(), domain, server, resp)
+}
+
+func resolverIPv4ResponseWithContext(ctx context.Context, domain, server string, resp *dns.Msg) []string {
 	if resp == nil {
-		logger.Printf("%s: resolver %s returned no DNS message", domain, server)
+		logUnlessCanceled(ctx, "%s: resolver %s returned no DNS message", domain, server)
 		return nil
 	}
 	if resp.Rcode != dns.RcodeSuccess {
-		logger.Printf("%s: resolver %s returned DNS %s", domain, server, dns.RcodeToString[resp.Rcode])
+		logUnlessCanceled(ctx, "%s: resolver %s returned DNS %s", domain, server, dns.RcodeToString[resp.Rcode])
 		return nil
 	}
 	return extractIPv4(resp)

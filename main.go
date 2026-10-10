@@ -17,7 +17,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-var logger = log.New(os.Stdout, "[ipscoutdns] ", log.LstdFlags)
+var logger = log.New(os.Stdout, "", log.LstdFlags)
 var currentConfig Config
 var domainRegexes []*regexp.Regexp
 
@@ -109,24 +109,22 @@ func main() {
 	}
 
 	icmpEnabled := cfg.ICMPProbe && cfg.TLSRoute != "proxy"
-	logger.Printf("starting IPScoutDNS")
+	logger.Printf("starting IPScoutDNS release %s", strings.TrimPrefix(releaseVersion, "v"))
 	if timezoneErr != nil {
 		logger.Printf("failed to load timezone from %s: %v; retaining OS default", timezoneSource, timezoneErr)
 	}
-	zone, offset := time.Now().Zone()
-	logger.Printf("local timezone: %s (%s, UTC offset %ds), source=%s", time.Local, zone, offset, timezoneSource)
 	logger.Printf("- config")
 	logger.Printf("\t- mode: %s", cfg.Mode)
 	if cfg.Mode == "active" {
 		logger.Printf("\t- UDP/TCP listen: %s", cfg.ListenAddr)
 		logger.Printf("\t- loaded %d domain filters from %s", len(domainRegexes), cfg.ActiveDomainsFile)
 		logger.Printf("\t- Probes enabled: TCP=%t TLS=%t HTTP=%t ICMP=%t", cfg.TCPProbe, cfg.TLSProbe, cfg.HTTPProbe, icmpEnabled)
-		logOtherConfigs(cfg)
+		logOtherConfigs(cfg, timezoneSource)
 
 	} else {
 		logger.Printf("\t- passive domains: %s", cfg.PassiveDomainsFile)
 		logger.Printf("\t- Probes enabled: TCP=%t TLS=%t HTTP=%t ICMP=%t", cfg.TCPProbe, cfg.TLSProbe, cfg.HTTPProbe, icmpEnabled)
-		logOtherConfigs(cfg)
+		logOtherConfigs(cfg, timezoneSource)
 	}
 	logger.Printf("")
 	logger.Printf("\t- DNS direct resolvers: %d", len(cfg.DirectDNS))
@@ -171,21 +169,6 @@ func main() {
 		logger.Fatalf("%v", err)
 	}
 	finishLogging(cfg)
-}
-
-func logOtherConfigs(cfg Config) {
-	var modeSettings string
-	if cfg.Mode == "active" {
-		modeSettings = fmt.Sprintf("ttl=%s answer_ttl=%d", cfg.CacheTTL, cfg.AnswerTTL)
-		if cfg.runtimeCopiesEnabled {
-			modeSettings += fmt.Sprintf(" active_copy_interval=%s active_log_copy_interval=%s", cfg.ActiveCopyInterval, cfg.ActiveLogCopyInterval)
-		}
-	} else {
-		modeSettings = fmt.Sprintf("passive_resolve_time=%q passive_resolve_interval=%s passive_resolve_parallel=%d", cfg.PassiveResolveTime, cfg.PassiveResolveInterval, cfg.PassiveResolveParallel)
-	}
-	logger.Printf("\t- Other configs: %s logs_enabled=%t save_logs=%t log_max_size=%dB log_keep_files=%d parallel_tests=%d hosts_max_ips_per_domain=%d reachable_hosts=%q reachable_domains_file=%q reachable_ips_file=%q unreachable_domains_file=%q unreachable_ips_file=%q",
-		modeSettings, cfg.LogsEnabled, cfg.SaveLogs, cfg.LogMaxSize, cfg.LogKeepFiles, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain,
-		cfg.ReachableHostsFile, cfg.ReachableDomainsFile, cfg.ReachableIPsFile, cfg.UnreachableDomainsFile, cfg.UnreachableIPsFile)
 }
 
 func runActive(ctx context.Context, cfg Config) {

@@ -163,7 +163,7 @@ func TestEarlyHTTPFallbackSelection(t *testing.T) {
 						t.Fatalf("unknown IP classified unreachable: %s", data)
 					}
 				}
-				if !strings.Contains(logs.String(), "pausing remaining TLS checks") || !strings.Contains(logs.String(), "[HTTP]") {
+				if strings.Count(logs.String(), "\n") != 1 || !strings.Contains(logs.String(), fmt.Sprintf("collected[20] reached[%d]", wantHosts)) || !strings.Contains(logs.String(), "[HTTP]") {
 					t.Fatalf("logs = %s", logs.String())
 				}
 			})

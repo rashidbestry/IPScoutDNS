@@ -10,7 +10,7 @@ import (
 
 func TestPassiveOutputLogIndentation(t *testing.T) {
 	var output bytes.Buffer
-	l := log.New(&output, "[ipscoutdns] ", log.LstdFlags)
+	l := log.New(&output, "", log.LstdFlags)
 	l.Printf("- config")
 	l.Printf("\t- mode: passive")
 	l.Printf("- output")
@@ -19,14 +19,14 @@ func TestPassiveOutputLogIndentation(t *testing.T) {
 		messageOffset: len(l.Prefix()) + len("2006/01/02 15:04:05 "),
 	})
 	l.Printf("passive pass: %d domains, up to %d parallel resolves", 1, 16)
-	l.Printf("example.com: WORKING IP = %s [%s]", "1.1.1.1", "TLS")
+	l.Printf("- example.com: collected[8] reached[8] WORKING IP = %s [%s]", "1.1.1.1", "TLS")
 	l.Printf("copied %d output files from %s to %s", 3, openWrtOutputDirectory, outputDestinationDirectory)
 	l.Printf("passive pass complete; next pass in 24h0m0s")
-	header := regexp.MustCompile(`^\[ipscoutdns\] \d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} `)
+	header := regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} `)
 	want := []string{
 		"- config", "\t- mode: passive", "- output",
 		"\tpassive pass: 1 domains, up to 16 parallel resolves",
-		"\texample.com: WORKING IP = 1.1.1.1 [TLS]",
+		"\t- example.com: collected[8] reached[8] WORKING IP = 1.1.1.1 [TLS]",
 		"\tcopied 3 output files from /tmp/ipscoutdns to /etc/ipscoutdns/outputs",
 		"\tpassive pass complete; next pass in 24h0m0s",
 	}

@@ -118,8 +118,8 @@ func TestDomainOutputReachability(t *testing.T) {
 						}
 					}
 					wantHTTPCalls := 1
-					if step.probe.tcpError != nil && strings.Count(logs.String(), "TCP 192.0.2.1:443 failed after 2 attempts: connection refused") != 1 {
-						t.Fatalf("expected one combined TCP failure: %s", logs.String())
+					if step.probe.tcpError != nil && (strings.Count(logs.String(), "NO WORKING IP") != 1 || !strings.Contains(logs.String(), "collected[1] reached[0] TCP[X] TLS[] HTTP[] ICMP[X]")) {
+						t.Fatalf("expected one failed-domain summary: %s", logs.String())
 					}
 					if step.probe.tcpReachable && step.probe.tlsReady {
 						wantHTTPCalls = 0

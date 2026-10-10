@@ -20,10 +20,8 @@ type tlsProbeResult struct {
 	tcpError      error
 }
 
-type deferTCPFailureLogsKey struct{}
-
 func logUnlessCanceled(ctx context.Context, format string, args ...any) {
-	if !errors.Is(ctx.Err(), context.Canceled) {
+	if !compactProbeLogs(ctx) && !errors.Is(ctx.Err(), context.Canceled) {
 		logger.Printf(format, args...)
 	}
 }
@@ -93,7 +91,7 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsPr
 	}
 	conn, err := dialReachability(ctx, domain, ip, cfg)
 	if err != nil {
-		if parent.Value(deferTCPFailureLogsKey{}) != true && !errors.Is(parent.Err(), context.Canceled) {
+		if !compactProbeLogs(parent) && !errors.Is(parent.Err(), context.Canceled) {
 			logTCPProbeFailure(domain, ip, port, cfg, "TCP", err, 1)
 		}
 		return tlsProbeResult{tcpError: err}
@@ -128,7 +126,7 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsPr
 			if err != nil {
 				logUnlessCanceled(parent, "%s: TLS %s failed after ALPN retry: %v", domain, ip, err)
 			} else {
-				logger.Printf("%s: TLS %s passed after ALPN retry", domain, ip)
+				logUnlessCanceled(parent, "%s: TLS %s passed after ALPN retry", domain, ip)
 			}
 		}
 	} else if err != nil {
@@ -157,6 +155,9 @@ func compactTCPError(err error) error {
 }
 
 func logTCPProbeFailure(domain, ip string, port int, cfg Config, probe string, err error, attempts int) {
+	if compactProbeLogs(cfg.runtimeContext) {
+		return
+	}
 	details := ""
 	if cfg.TLSRoute == "proxy" {
 		details = " via SOCKS5 " + cfg.TLSSOCKS5Addr
@@ -165,26 +166,6 @@ func logTCPProbeFailure(domain, ip string, port int, cfg Config, probe string, e
 		details += fmt.Sprintf(" after %d attempts", attempts)
 	}
 	logger.Printf("%s: %s %s failed%s: %v", domain, probe, net.JoinHostPort(ip, strconv.Itoa(port)), details, compactTCPError(err))
-}
-
-func logTCPProbeResults(domain string, ips []string, cfg Config, first, retry map[string]tlsProbeResult) {
-	port := cfg.TLSPort
-	if port == 0 {
-		port = 443
-	}
-	for _, ip := range ips {
-		firstErr, retryErr := first[ip].tcpError, retry[ip].tcpError
-		if firstErr != nil && retryErr != nil && compactTCPError(firstErr).Error() == compactTCPError(retryErr).Error() {
-			logTCPProbeFailure(domain, ip, port, cfg, "TCP", retryErr, 2)
-			continue
-		}
-		if firstErr != nil {
-			logTCPProbeFailure(domain, ip, port, cfg, "TCP", firstErr, 1)
-		}
-		if retryErr != nil {
-			logTCPProbeFailure(domain, ip, port, cfg, "TCP retry", retryErr, 1)
-		}
-	}
 }
 
 func isRemoteTLSInternalError(err error) bool {
@@ -225,7 +206,7 @@ func dialReachabilityPort(ctx context.Context, domain string, ip string, cfg Con
 	case "direct":
 		localAddr, err := localAddrForInterface(cfg.DirectTCPInterface, "tcp", targetAddr)
 		if err != nil {
-			logger.Printf("%s: invalid direct TCP interface selection: %v", domain, err)
+			logUnlessCanceled(ctx, "%s: invalid direct TCP interface selection: %v", domain, err)
 			return nil, err
 		}
 		dialer := &net.Dialer{LocalAddr: localAddr}

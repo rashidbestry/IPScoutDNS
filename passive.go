@@ -68,6 +68,7 @@ func isLiteralDomain(domain string) bool {
 type passiveResolveFunc func(context.Context, string, Config)
 
 func resolvePassiveDomain(ctx context.Context, domain string, cfg Config) {
+	ctx = compactProbeContext(ctx)
 	resolvePassiveDomainWith(ctx, domain, cfg, queryResolver, testTLS, pingProbe(ctx, cfg))
 }
 
@@ -78,13 +79,7 @@ func resolvePassiveDomainWith(ctx context.Context, domain string, cfg Config, qu
 func resolvePassiveDomainWithProbes(ctx context.Context, domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, httpCheck httpProbeFunc, pingCheck icmpProbeFunc) {
 	// Each scheduled pass performs fresh discovery and probing, regardless of TTL.
 	cfg.CacheTTL = 0
-	_, ok, _ := resolveAndSelectWithProbes(ctx, domain, cfg, query, tlsCheck, httpCheck, pingCheck)
-	if ctx.Err() != nil {
-		return
-	}
-	if !ok {
-		logger.Printf("%s: NO WORKING IP FOUND", domain)
-	}
+	resolveAndSelectWithProbes(ctx, domain, cfg, query, tlsCheck, httpCheck, pingCheck)
 }
 
 func runPassive(ctx context.Context, cfg Config) error {

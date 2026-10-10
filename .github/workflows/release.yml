@@ -41,7 +41,7 @@ jobs:
       - name: Build binary
         run: |
           mkdir -p dist
-          go build -trimpath -o "dist/${{ matrix.binary }}" .
+          go build -trimpath -ldflags="-X main.releaseVersion=${GITHUB_REF_NAME#v}" -o "dist/${{ matrix.binary }}" .
           cp -R config dist/
         env:
           GOOS: ${{ matrix.goos }}

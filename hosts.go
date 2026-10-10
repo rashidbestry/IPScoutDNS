@@ -47,7 +47,7 @@ func pingIPWithRunner(parent context.Context, ip string, run func(context.Contex
 	if err == nil && ctxErr == nil {
 		return true
 	}
-	if parent.Err() == nil {
+	if parent.Err() == nil && !compactProbeLogs(parent) {
 		reason := fmt.Sprint(err)
 		text := strings.TrimSpace(string(output))
 		if ctxErr != nil {

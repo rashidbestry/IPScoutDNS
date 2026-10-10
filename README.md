@@ -59,6 +59,15 @@ Missed dates are not replayed. When a daily time is set, `passive_resolve_interv
 is ignored. Leave the time blank to run immediately and then wait the configured
 interval after each completed pass.
 
+Startup logs include the release version (`dev` for local builds) and a two-column
+"Other configs" block containing the timezone. Each completed domain resolution
+logs `collected[N]` unique IPv4 candidates and `reached[N]` working IPs found,
+followed by the selected `WORKING IP` and protocol. Failed selections show
+`TCP[] TLS[] HTTP[] ICMP[] NO WORKING IP`; `X` marks an attempted stage with no
+success, while empty brackets mean success, disabled or not attempted. These
+summaries replace per-candidate probe details. Cache hits show `CACHE HIT` alone;
+file-write and DNS fallback transport errors still appear separately.
+
 Domain-file paths resolve beside the config. The sample uses port 53; choose a free listener port.
 
 Optional `pre_launch_commands` and `passive_post_commands` lists accept one shell

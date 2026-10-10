@@ -74,8 +74,11 @@ jobs:
       - name: Install packaging dependencies
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y zstd fakeroot
       - name: Build static binary with conservative CPU requirements
-        run: go build -trimpath -ldflags="-s -w -X main.openWrtPackage=true" -o "$RUNNER_TEMP/ipscoutdns" .
+        run: |
+          version="${RELEASE_VERSION:-dev}"
+          go build -trimpath -ldflags="-s -w -X main.openWrtPackage=true -X main.releaseVersion=${version#v}" -o "$RUNNER_TEMP/ipscoutdns" .
         env:
+          RELEASE_VERSION: ${{ inputs.version }}
           CGO_ENABLED: 0
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}

@@ -199,9 +199,12 @@ func TestDomainReachabilityRetriesTransientTCPFailure(t *testing.T) {
 
 func TestNoCandidatesPreservesDomainStatus(t *testing.T) {
 	previousConfig := currentConfig
-	t.Cleanup(func() { currentConfig = previousConfig })
+	previousWriter := logger.Writer()
+	t.Cleanup(func() { currentConfig = previousConfig; logger.SetOutput(previousWriter) })
 	for _, status := range []string{"unknown", "reachable", "unreachable"} {
 		t.Run(status, func(t *testing.T) {
+			var logs selectionLogBuffer
+			logger.SetOutput(&logs)
 			dir := t.TempDir()
 			cfg := Config{TCPProbe: true, TLSProbe: true, ICMPProbe: true,
 				DirectDNS:              []string{"test"},
@@ -222,6 +225,9 @@ func TestNoCandidatesPreservesDomainStatus(t *testing.T) {
 			}, func(string) bool { t.Error("no candidate should be pinged"); return false })
 			if ok {
 				t.Fatal("unexpected selected IP")
+			}
+			if output := logs.String(); output != "" {
+				t.Fatalf("no candidates should produce no result log, got %q", output)
 			}
 			for path, hasDomain := range map[string]bool{
 				cfg.ReachableDomainsFile:   status == "reachable",

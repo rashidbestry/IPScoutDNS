@@ -212,7 +212,6 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	if len(ips) == 0 {
 		// Without a candidate IP, no reachability probe was possible. Preserve
 		// the previous status rather than treating a DNS failure as a TCP failure.
-		logDomainResult(domain, 0, 0, "", "", cfg, nil, nil, nil, "no IPv4 candidates; previous status kept")
 		return "", false, false
 	}
 	checkTCPOrTLS := func(ip string) tlsProbeResult {

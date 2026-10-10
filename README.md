@@ -60,7 +60,8 @@ is ignored. Leave the time blank to run immediately and then wait the configured
 interval after each completed pass.
 
 Startup logs include the release version (`dev` for local builds) and a two-column
-"Other configs" block containing the timezone. Each completed domain resolution
+"Other configs" block containing the timezone. Domains with no IPv4 candidates
+are omitted from result logs. Each completed resolution with IPv4 candidates
 logs `collected[N]` unique IPv4 candidates and `reached[N]` working IPs found,
 followed by the selected `WORKING IP` and protocol. Failed selections show
 `TCP[] TLS[] HTTP[] ICMP[] NO WORKING IP`; `X` marks an attempted stage with no

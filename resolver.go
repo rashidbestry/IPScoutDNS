@@ -84,11 +84,11 @@ func handleDNSWith(w dns.ResponseWriter, req *dns.Msg, resolve func(string, Conf
 }
 
 func resolveAndSelect(domain string, cfg Config) (string, bool) {
-	return resolveAndSelectWith(domain, cfg, queryResolver, testTLS, pingIPFn)
+	return resolveAndSelectWith(domain, cfg, queryResolver, testTLS, pingProbe(dnsServiceContext(cfg), cfg))
 }
 
 func resolveAndSelectStatus(domain string, cfg Config) (string, bool, bool) {
-	return resolveAndSelectWithStatus(domain, cfg, queryResolver, testTLS, pingIPFn)
+	return resolveAndSelectWithStatus(domain, cfg, queryResolver, testTLS, pingProbe(dnsServiceContext(cfg), cfg))
 }
 
 type resolverQueryFunc func(context.Context, string, string, bool, Config) []string

@@ -143,7 +143,29 @@ func TestPingArgs(t *testing.T) {
 		t.Skip("ping arguments are defined for Linux and Windows")
 	}
 
-	if got := pingArgs("192.0.2.1"); !reflect.DeepEqual(got, want) {
-		t.Fatalf("pingArgs() = %v, want %v", got, want)
+	for _, selector := range []string{"", "default", " DEFAULT "} {
+		got, err := pingArgs("192.0.2.1", selector)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("pingArgs(%q) = %v, %v; want %v, nil", selector, got, err, want)
+		}
+	}
+}
+
+func TestPingProbeUsesConfigAndContext(t *testing.T) {
+	previous := pingIPFn
+	t.Cleanup(func() { pingIPFn = previous })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	pingIPFn = func(gotCtx context.Context, ip string, selector string) bool {
+		calls++
+		if gotCtx != ctx || ip != "192.0.2.1" || selector != "eth0" {
+			t.Fatalf("ping received context=%v, ip=%q, interface=%q", gotCtx, ip, selector)
+		}
+		return true
+	}
+	probe := pingProbe(ctx, Config{DirectTCPInterface: "eth0"})
+	if !probe("192.0.2.1") || calls != 1 {
+		t.Fatalf("configured ping calls = %d, want one successful call", calls)
 	}
 }

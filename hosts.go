@@ -17,16 +17,22 @@ var (
 	writtenReachableIPs       = make(map[string]bool)
 	writtenUnreachableDomains = make(map[string]bool)
 	writtenUnreachableIPs     = make(map[string]bool)
-	pingIPFn                  = pingIP
+	pingIPFn                  = pingIPContext
 )
 
-func pingIP(ip string) bool {
-	return pingIPContext(context.Background(), ip)
+func pingProbe(parent context.Context, cfg Config) icmpProbeFunc {
+	return func(ip string) bool {
+		return pingIPFn(parent, ip, cfg.DirectTCPInterface)
+	}
 }
 
-func pingIPContext(parent context.Context, ip string) bool {
+func pingIPContext(parent context.Context, ip string, interfaceSelector string) bool {
 	return pingIPWithRunner(parent, ip, func(ctx context.Context, ip string) ([]byte, error) {
-		return exec.CommandContext(ctx, "ping", pingArgs(ip)...).CombinedOutput()
+		args, err := pingArgs(ip, interfaceSelector)
+		if err != nil {
+			return nil, err
+		}
+		return exec.CommandContext(ctx, "ping", args...).CombinedOutput()
 	})
 }
 

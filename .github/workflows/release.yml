@@ -51,8 +51,10 @@ jobs:
           archive="ipscoutdns-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.extension }}"
           if [ "${{ matrix.extension }}" = "zip" ]; then
             (cd dist && zip -qr "../$archive" .)
+            unzip -p "$archive" config/ipscoutdns.conf | cmp - config/ipscoutdns.conf
           else
             tar -C dist -czf "$archive" .
+            tar -xOzf "$archive" ./config/ipscoutdns.conf | cmp - config/ipscoutdns.conf
           fi
       - uses: actions/upload-artifact@v4
         with:

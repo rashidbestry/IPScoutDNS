@@ -54,7 +54,10 @@ Binary size, free flash, RAM, domain count and concurrency also limit device
 support. For small devices, start with `parallel_tests=2`,
 `dns_query_parallel=2`, `passive_resolve_parallel=1` and `save_logs=false`,
 then measure memory use with your domain lists. Release packaging preserves
-the canonical config; it does not silently lower these settings.
+the canonical config byte-for-byte, including comments and line endings. With
+`/etc/ipscoutdns.conf`, the packaged binary resolves the default relative domain
+filenames under `/etc/ipscoutdns/`; other relative filenames resolve beside the
+selected config. Packaging does not silently lower these settings.
 
 For an unlisted package architecture name, use the archive matching the CPU
 and byte order. It contains installed paths (`usr/bin/`, `etc/`), not a

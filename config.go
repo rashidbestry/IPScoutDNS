@@ -712,14 +712,24 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 	if err != nil {
 		return cfg, fmt.Errorf("resolve config path %s: %w", path, err)
 	}
-	// Resolve domain inputs beside the selected config, independent of the
-	// process working directory. Preserve absolute and rooted platform paths.
 	for _, input := range []*string{&cfg.ActiveDomainsFile, &cfg.PassiveDomainsFile} {
-		if *input != "" && !filepath.IsAbs(*input) && !os.IsPathSeparator((*input)[0]) {
-			*input = filepath.Join(filepath.Dir(configPath), *input)
-		}
+		*input = resolveDomainInputPath(*input, configPath, runtime.GOOS == "linux" && openWrtPackage == "true")
 	}
 	return cfg, nil
+}
+
+// The installed OpenWrt config stays identical to the canonical file. Its
+// default domain lists live in /etc/ipscoutdns; other relative inputs remain
+// beside the selected config, independent of the process working directory.
+func resolveDomainInputPath(input, configPath string, packageBuild bool) string {
+	if input == "" || filepath.IsAbs(input) || os.IsPathSeparator(input[0]) {
+		return input
+	}
+	if packageBuild && filepath.Clean(configPath) == filepath.Clean(defaultConfigPath) &&
+		(input == "active-domains.txt" || input == "passive-domains.txt") {
+		return filepath.Join(filepath.Dir(configPath), "ipscoutdns", input)
+	}
+	return filepath.Join(filepath.Dir(configPath), input)
 }
 
 func cleanList(in []string) []string {

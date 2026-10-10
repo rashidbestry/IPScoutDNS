@@ -92,9 +92,8 @@ class PackageTests(unittest.TestCase):
                     self.assertEqual(data.extractfile("./usr/share/ipscoutdns/ca-certificates.crt").read(), ca_bundle.read_bytes())
                     self.assertTrue(all(member.uid == member.gid == 0 for member in data))
                     self.assertNotIn("./CONTROL", data.getnames())
-                    config = data.extractfile("./etc/ipscoutdns.conf").read().decode()
-                    self.assertIn("active_domains_file=/etc/ipscoutdns/active-domains.txt\n", config)
-                    self.assertIn("tcp_route=proxy\n", config)
+                    self.assertEqual(data.extractfile("./etc/ipscoutdns.conf").read(),
+                                     (builder.REPO / "config/ipscoutdns.conf").read_bytes())
             builder.build_ipk(root, work / "control2", "1.2.3", "x86", package, 123)
             self.assertEqual(package.read_bytes(), first_build)
 

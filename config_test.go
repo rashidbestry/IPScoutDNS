@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -386,6 +387,30 @@ tcp_route=interface
 	}
 }
 
+func TestOpenWrtDefaultDomainInputPaths(t *testing.T) {
+	tests := []struct {
+		name, input, configPath, want string
+		packageBuild                  bool
+	}{
+		{"active package default", "active-domains.txt", defaultConfigPath, "/etc/ipscoutdns/active-domains.txt", true},
+		{"passive package default", "passive-domains.txt", defaultConfigPath, "/etc/ipscoutdns/passive-domains.txt", true},
+		{"regular build", "active-domains.txt", defaultConfigPath, "/etc/active-domains.txt", false},
+		{"custom config", "active-domains.txt", "/custom/ipscoutdns.conf", "/custom/active-domains.txt", true},
+		{"custom filename", "custom.txt", defaultConfigPath, "/etc/custom.txt", true},
+		{"custom relative path", "lists/active-domains.txt", defaultConfigPath, "/etc/lists/active-domains.txt", true},
+		{"absolute path", "/custom/domains.txt", defaultConfigPath, "/custom/domains.txt", true},
+		{"disabled input", "", defaultConfigPath, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveDomainInputPath(tt.input, tt.configPath, tt.packageBuild)
+			if filepath.Clean(got) != filepath.Clean(tt.want) {
+				t.Fatalf("resolved input = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOpenWrtPackageConfig(t *testing.T) {
 	configPath := os.Getenv("IPSCOUTDNS_OPENWRT_CONFIG")
 	if configPath == "" {
@@ -399,13 +424,35 @@ func TestOpenWrtPackageConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Packaging only relocates inputs. All other source settings must survive,
-	// including proxy resolvers, listener/route, probes, logging and scheduling.
-	if expected.ActiveDomainsFile != "" {
-		expected.ActiveDomainsFile = "/etc/ipscoutdns/active-domains.txt"
+	generated, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if expected.PassiveDomainsFile != "" {
-		expected.PassiveDomainsFile = "/etc/ipscoutdns/passive-domains.txt"
+	source, err := os.ReadFile(priorityConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(generated, source) {
+		t.Fatal("packaged config differs from the canonical file")
+	}
+	// The workflow validates a temporary copy, so only its config directory
+	// differs. Installed default domain paths have separate regression coverage.
+	absConfigPath, err := filepath.Abs(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	absSourcePath, err := filepath.Abs(priorityConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []*string{&expected.ActiveDomainsFile, &expected.PassiveDomainsFile} {
+		if *input != "" {
+			relative, err := filepath.Rel(filepath.Dir(absSourcePath), *input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			*input = filepath.Join(filepath.Dir(absConfigPath), relative)
+		}
 	}
 	if !reflect.DeepEqual(cfg, expected) {
 		t.Fatalf("generated config lost or changed source settings:\ngot:  %+v\nwant: %+v", cfg, expected)

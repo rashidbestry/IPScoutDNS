@@ -1,43 +1,9 @@
 #!/usr/bin/env python3
-"""Generate OpenWrt config and domain-list files from canonical inputs."""
+"""Copy canonical config and domain-list files byte-for-byte for OpenWrt."""
 
 import argparse
 import shutil
 from pathlib import Path
-
-
-DOMAIN_PATHS = {
-    "active_domains_file": "/etc/ipscoutdns/active-domains.txt",
-    "passive_domains_file": "/etc/ipscoutdns/passive-domains.txt",
-}
-
-
-def generate_config(source: str) -> str:
-    """Preserve source data, changing only nonempty packaged domain-list paths."""
-    output = []
-    command_block = False
-
-    for line in source.splitlines():
-        stripped = line.strip()
-        if command_block:
-            output.append(line)
-            if stripped == "}":
-                command_block = False
-            continue
-        if stripped.startswith(("#", ";")) or "=" not in stripped:
-            output.append(line)
-            continue
-
-        key, value = stripped.split("=", 1)
-        key = key.strip().lower()
-        if key in ("pre_launch_commands", "passive_post_commands") and value.strip() == "{":
-            command_block = True
-        if key in DOMAIN_PATHS and value.strip():
-            output.append(f"{key}={DOMAIN_PATHS[key]}")
-        else:
-            output.append(line)
-
-    return "\n".join(output) + "\n"
 
 
 def main() -> None:
@@ -57,9 +23,8 @@ def main() -> None:
         if (source is None) != (destination is None):
             parser.error(f"--{name}-source and --{name}-destination must be provided together")
 
-    generated = generate_config(args.source.read_text(encoding="utf-8"))
     args.destination.parent.mkdir(parents=True, exist_ok=True)
-    args.destination.write_text(generated, encoding="utf-8", newline="\n")
+    shutil.copyfile(args.source, args.destination)
 
     for name in ("active-domains", "passive-domains"):
         argument_name = name.replace("-", "_")

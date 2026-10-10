@@ -1,1 +1,2 @@
 packaging/openwrt/files/*.init text eol=lf
+config/ipscoutdns.conf -text

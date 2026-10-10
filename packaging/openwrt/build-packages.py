@@ -4,7 +4,6 @@
 import argparse
 import gzip
 import hashlib
-import importlib.util
 import io
 import json
 import os
@@ -82,16 +81,10 @@ def validate_binary(binary, goarch):
 
 
 def stage_files(root, binary, ca_bundle):
-    spec = importlib.util.spec_from_file_location("generate_config", HERE / "generate-config.py")
-    generator = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(generator)
     files = {
         "usr/bin/ipscoutdns": (binary.read_bytes(), 0o755),
         "etc/init.d/ipscoutdns": ((HERE / "files/ipscoutdns.init").read_bytes(), 0o755),
-        "etc/ipscoutdns.conf": (
-            generator.generate_config((REPO / "config/ipscoutdns.conf").read_text(encoding="utf-8")).encode(),
-            0o644,
-        ),
+        "etc/ipscoutdns.conf": ((REPO / "config/ipscoutdns.conf").read_bytes(), 0o644),
         "etc/ipscoutdns/active-domains.txt": ((REPO / "config/active-domains.txt").read_bytes(), 0o644),
         "etc/ipscoutdns/passive-domains.txt": ((REPO / "config/passive-domains.txt").read_bytes(), 0o644),
         "usr/share/licenses/ipscoutdns/LICENSE": ((REPO / "LICENSE").read_bytes(), 0o644),

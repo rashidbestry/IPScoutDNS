@@ -69,7 +69,7 @@ success, while empty brackets mean success, disabled or not attempted. These
 summaries replace per-candidate probe details. Cache hits show `CACHE HIT` alone;
 file-write and DNS fallback transport errors still appear separately.
 
-Domain-file paths resolve beside the config. The sample uses port 53; choose a free listener port.
+Release bundles preserve `config/ipscoutdns.conf` byte-for-byte. Domain-file paths resolve beside the config; OpenWrt package builds using `/etc/ipscoutdns.conf` resolve the default domain filenames under `/etc/ipscoutdns/`. The sample uses port 53; choose a free listener port.
 
 Optional `pre_launch_commands` and `passive_post_commands` lists accept one shell
 command per line inside `{` / `}` blocks, without comma separators. PRE runs once

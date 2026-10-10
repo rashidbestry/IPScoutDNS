@@ -167,12 +167,8 @@ func main() {
 		output:        logger.Writer(),
 		messageOffset: len(logger.Prefix()) + len("2006/01/02 15:04:05 "),
 	})
-	if cfg.Mode == "passive" {
-		if err := runPassive(ctx, cfg); err != nil {
-			logger.Fatalf("passive mode: %v", err)
-		}
-	} else {
-		runActive(ctx, cfg)
+	if err := runMode(ctx, cfg, runActive, runPassive); err != nil {
+		logger.Fatalf("%v", err)
 	}
 	finishLogging(cfg)
 }

@@ -15,6 +15,27 @@ SPEC.loader.exec_module(generator)
 
 
 class GenerateConfigTests(unittest.TestCase):
+    def test_command_blocks_are_preserved_without_rewriting_shell_assignments(self):
+        source = """pre_launch_commands={
+    active_domains_file=custom.txt
+    echo "a,b # c; d" > /tmp/example
+}
+passive_post_commands={
+    passive_domains_file=custom.txt
+    /etc/init.d/dnsmasq reload
+}
+active_domains_file=custom.txt
+passive_domains_file=custom.txt
+"""
+        expected = source.replace(
+            "\nactive_domains_file=custom.txt\n",
+            "\nactive_domains_file=/etc/ipscoutdns/active-domains.txt\n",
+        ).replace(
+            "\npassive_domains_file=custom.txt\n",
+            "\npassive_domains_file=/etc/ipscoutdns/passive-domains.txt\n",
+        )
+        self.assertEqual(generator.generate_config(source), expected)
+
     def test_canonical_config_preserves_all_data_except_installed_input_paths(self):
         source = SCRIPT.parents[2] / "config" / "ipscoutdns.conf"
         contents = source.read_text(encoding="utf-8")

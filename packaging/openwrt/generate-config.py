@@ -15,15 +15,23 @@ DOMAIN_PATHS = {
 def generate_config(source: str) -> str:
     """Preserve source data, changing only nonempty packaged domain-list paths."""
     output = []
+    command_block = False
 
     for line in source.splitlines():
         stripped = line.strip()
+        if command_block:
+            output.append(line)
+            if stripped == "}":
+                command_block = False
+            continue
         if stripped.startswith(("#", ";")) or "=" not in stripped:
             output.append(line)
             continue
 
         key, value = stripped.split("=", 1)
         key = key.strip().lower()
+        if key in ("pre_launch_commands", "passive_post_commands") and value.strip() == "{":
+            command_block = True
         if key in DOMAIN_PATHS and value.strip():
             output.append(f"{key}={DOMAIN_PATHS[key]}")
         else:

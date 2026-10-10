@@ -43,6 +43,8 @@ const (
 
 type Config struct {
 	Mode                   string
+	PreLaunchCommands      []string
+	PassivePostCommands    []string
 	ActiveDomainsFile      string
 	PassiveDomainsFile     string
 	PassiveResolveTime     string
@@ -324,6 +326,17 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 	)
 
 	addListValue := func(key, value string) {
+		// Commands are whole shell lines, not comma-separated DNS entries.
+		if key == "pre_launch_commands" || key == "passive_post_commands" {
+			if value = strings.TrimSpace(value); value != "" {
+				if key == "pre_launch_commands" {
+					cfg.PreLaunchCommands = append(cfg.PreLaunchCommands, value)
+				} else {
+					cfg.PassivePostCommands = append(cfg.PassivePostCommands, value)
+				}
+			}
+			return
+		}
 		for _, item := range parseFlatList(value) {
 			switch key {
 			case "direct_dns":
@@ -340,6 +353,16 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		// Parse command blocks before decorative text or config syntax so plain
+		// commands, assignments, brackets and shell punctuation survive intact.
+		if currentListKey == "pre_launch_commands" || currentListKey == "passive_post_commands" {
+			if line == "}" {
+				currentListKey = ""
+			} else {
+				addListValue(currentListKey, line)
+			}
 			continue
 		}
 		if !strings.Contains(line, "=") && !strings.Contains(line, "{") && !strings.Contains(line, "}") {
@@ -370,6 +393,12 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 			key = strings.ToLower(strings.TrimSpace(key))
 			value = strings.TrimSpace(value)
 			switch key {
+			case "pre_launch_commands", "passive_post_commands":
+				if value == "{" {
+					currentListKey = key
+				} else if value != "{}" {
+					addListValue(key, value)
+				}
 			case "mode":
 				if cfg.Mode != "" {
 					return cfg, fmt.Errorf("%s:%d: mode must be specified only once", path, lineNo)
@@ -611,6 +640,9 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 	}
 	if err := scanner.Err(); err != nil {
 		return cfg, err
+	}
+	if currentListKey == "pre_launch_commands" || currentListKey == "passive_post_commands" {
+		return cfg, fmt.Errorf("%s:%d: unclosed %s block; expected }", path, lineNo, currentListKey)
 	}
 
 	if p, err := strconv.Atoi(strings.TrimPrefix(rawDNSProxyAddr, ":")); err == nil && p > 0 && p <= 65535 {

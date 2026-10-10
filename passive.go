@@ -156,8 +156,17 @@ func runPassiveWithClock(ctx context.Context, cfg Config, load func(string) ([]s
 			if ctx.Err() != nil {
 				return nil
 			}
-			if err := copyOutputs(ctx); err != nil && ctx.Err() == nil {
-				logger.Printf("failed to copy passive outputs: %v", err)
+			if err := copyOutputs(ctx); err != nil {
+				if ctx.Err() == nil {
+					logger.Printf("failed to copy passive outputs: %v", err)
+				}
+			} else if ctx.Err() == nil {
+				if err := runCommands(ctx, cfg.PassivePostCommands); err != nil && ctx.Err() == nil {
+					logger.Printf("passive POST commands: %v", err)
+				}
+			}
+			if ctx.Err() != nil {
+				return nil
 			}
 			if ctx.Err() == nil && cfg.PassiveResolveTime == "" {
 				logger.Printf("passive pass complete; next pass in %s", cfg.PassiveResolveInterval)

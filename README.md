@@ -61,6 +61,18 @@ interval after each completed pass.
 
 Domain-file paths resolve beside the config. The sample uses port 53; choose a free listener port.
 
+Optional `pre_launch_commands` and `passive_post_commands` lists accept one shell
+command per line inside `{` / `}` blocks, without comma separators. PRE runs once
+at startup in either mode, before listeners or scheduling. POST runs after each
+completed Passive pass and successful output copying; skipped or interrupted
+passes do not run POST. Empty lists disable hooks. Commands run sequentially and
+wait for completion, using `cmd.exe` on Windows or `/bin/sh` on Linux/OpenWrt.
+Each command has its own shell, with the service's working directory, environment
+and permissions. Command output is discarded; failures are reported by command
+number. All commands are attempted unless shutdown cancels the hook. PRE failures
+stop startup; POST failures allow future passes. The Passive interval starts after
+POST finishes, and daily scheduling skips any dates missed while commands run.
+
 On Linux/OpenWrt, `direct_tcp_mark` sets a socket mark for direct TCP/TLS/HTTP probes; `0` disables marking. Set `direct_tcp_mark=255` (or `0xff`) when your firewall already exempts that mark, such as the Passwall2 bypass rule. It requires root or a suitable network capability and preserves `direct_tcp_interface` source binding. A marking failure fails the probe. DNS, ICMP, and SOCKS5 connections are not marked by this setting; nonzero marks are rejected on other operating systems.
 
 Regular Linux writes output files to `./outputs/` and saved logs to `./logs/`, relative to the working directory, without copying. Windows keeps outputs beside the executable and saved logs in its `logs/` folder.

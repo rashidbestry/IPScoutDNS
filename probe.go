@@ -85,14 +85,36 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsPr
 	if !cfg.TLSProbe {
 		return tlsProbeResult{tcpReachable: true}
 	}
-	tlsConn := tls.Client(conn, &tls.Config{
+	tlsConfig := &tls.Config{
 		ServerName:         domain,
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: true,
-	})
+	}
+	tlsConn := tls.Client(conn, tlsConfig)
 	err = tlsConn.HandshakeContext(ctx)
 	if err != nil {
 		logger.Printf("%s: TLS handshake %s failed after TCP success: %v", domain, ip, err)
+	}
+	if isRemoteTLSAlert(err, "tls: insufficient security level") && ctx.Err() == nil {
+		// A fatal alert ends the first TLS connection. Reconnect through the
+		// same route, retaining this candidate's original timeout budget.
+		_ = conn.Close()
+		logger.Printf("%s: TLS %s rejected the handshake with insufficient_security; retrying once with ALPN h2,http/1.1", domain, ip)
+		retryConn, retryErr := dialReachability(ctx, domain, ip, cfg)
+		if retryErr != nil {
+			err = retryErr
+			logger.Printf("%s: TLS ALPN retry TCP connection to %s failed (route=%s): %v", domain, ip, cfg.TLSRoute, err)
+		} else {
+			defer retryConn.Close()
+			retryConfig := tlsConfig.Clone()
+			retryConfig.NextProtos = []string{"h2", "http/1.1"}
+			err = tls.Client(retryConn, retryConfig).HandshakeContext(ctx)
+			if err != nil {
+				logger.Printf("%s: TLS ALPN retry handshake %s failed: %v", domain, ip, err)
+			} else {
+				logger.Printf("%s: TLS ALPN retry succeeded for %s", domain, ip)
+			}
+		}
 	}
 	return tlsProbeResult{
 		tcpReachable:  true,
@@ -102,12 +124,16 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsPr
 }
 
 func isRemoteTLSInternalError(err error) bool {
+	return isRemoteTLSAlert(err, "tls: internal error")
+}
+
+func isRemoteTLSAlert(err error, alertText string) bool {
 	// crypto/tls represents received TCP alerts as net.OpError wrapping an
 	// unexported alert type. Check its operation and exact alert text, rather
 	// than matching arbitrary transport errors or the complete log message.
 	var remote *net.OpError
 	return errors.As(err, &remote) && remote.Op == "remote error" &&
-		remote.Err != nil && remote.Err.Error() == "tls: internal error"
+		remote.Err != nil && remote.Err.Error() == alertText
 }
 
 func reachabilityContext(parent context.Context, cfg Config) (context.Context, context.CancelFunc) {

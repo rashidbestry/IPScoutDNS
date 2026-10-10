@@ -110,3 +110,12 @@ threshold resets for each fresh resolution; a later pass tries TLS again.
 
 Check out FLOWCHART [FLOWCHART](FLOWCHART.md).
 
+## TLS ALPN compatibility retry
+
+When a TLS probe receives the remote `insufficient_security` alert, it retries
+once on a fresh connection advertising ALPN `h2` and `http/1.1`. The retry uses
+the same candidate IP, hostname, port, route, and direct-interface selection,
+and shares the original candidate timeout. This applies in Active and Passive
+modes without a new config setting. A successful retry qualifies the IP for
+`[TLS]` selection. Other alerts, EOFs, and timeouts do not trigger this retry.
+

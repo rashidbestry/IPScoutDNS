@@ -146,6 +146,7 @@ func main() {
 	logger.Printf("\t- TCP/TLS/HTTP/ICMP route: %s", cfg.TLSRoute)
 	if cfg.TLSRoute == "direct" {
 		logger.Printf("\t- TCP/TLS/HTTP/ICMP direct interface: %s", configuredOrDefault(cfg.DirectTCPInterface))
+		logger.Printf("\t- Direct TCP/TLS/HTTP socket mark: %d (%#x)", cfg.DirectTCPMark, cfg.DirectTCPMark)
 	} else if cfg.TLSRoute == "proxy" {
 		logger.Printf("\t- TCP/TLS/HTTP SOCKS5 proxy: %s", cfg.TLSSOCKS5Addr)
 	}

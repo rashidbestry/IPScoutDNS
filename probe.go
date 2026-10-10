@@ -164,7 +164,11 @@ func dialReachabilityPort(ctx context.Context, domain string, ip string, cfg Con
 			logger.Printf("%s: invalid direct TCP interface selection: %v", domain, err)
 			return nil, err
 		}
-		return (&net.Dialer{LocalAddr: localAddr}).DialContext(ctx, "tcp", targetAddr)
+		dialer := &net.Dialer{LocalAddr: localAddr}
+		if err := configureDirectTCPMark(dialer, cfg.DirectTCPMark); err != nil {
+			return nil, err
+		}
+		return dialer.DialContext(ctx, "tcp", targetAddr)
 	default:
 		return nil, fmt.Errorf("unsupported TCP route %q", cfg.TLSRoute)
 	}

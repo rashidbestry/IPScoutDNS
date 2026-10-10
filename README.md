@@ -50,6 +50,8 @@ Edit [config/ipscoutdns.conf](config/ipscoutdns.conf) before starting. On OpenWr
 
 Domain-file paths resolve beside the config. The sample uses port 53; choose a free listener port.
 
+On Linux/OpenWrt, `direct_tcp_mark` sets a socket mark for direct TCP/TLS/HTTP probes; `0` disables marking. Set `direct_tcp_mark=255` (or `0xff`) when your firewall already exempts that mark, such as the Passwall2 bypass rule. It requires root or a suitable network capability and preserves `direct_tcp_interface` source binding. A marking failure fails the probe. DNS, ICMP, and SOCKS5 connections are not marked by this setting; nonzero marks are rejected on other operating systems.
+
 Regular Linux writes output files to `./outputs/` and saved logs to `./logs/`, relative to the working directory, without copying. Windows keeps outputs beside the executable and saved logs in its `logs/` folder.
 
 Only OpenWrt package builds use `/tmp/ipscoutdns/` and copy outputs to `/etc/ipscoutdns/outputs/` after passive passes or at `active_copy_interval` in active mode. Saved logs are copied to `/etc/ipscoutdns/logs/` after passive passes, at `active_log_copy_interval` in active mode, and once more during a clean active shutdown. The package workflow builds with `-ldflags="-X main.openWrtPackage=true"`; ordinary Linux builds keep the local layout even when run on OpenWrt.

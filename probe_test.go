@@ -92,7 +92,7 @@ func TestHTTPProbeUsesSOCKS5AndPort80(t *testing.T) {
 		_, err = io.WriteString(conn, "HTTP/1.1 302 Found\r\nLocation: https://example.com/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 		errors <- err
 	}()
-	result := testHTTP(context.Background(), "example.com", "192.0.2.1", Config{TLSRoute: "proxy", TLSSOCKS5Addr: proxy.Addr().String(), TLSTimeout: time.Second})
+	result := testHTTP(context.Background(), "example.com", "192.0.2.1", Config{TLSRoute: "proxy", DirectTCPMark: 255, TLSSOCKS5Addr: proxy.Addr().String(), TLSTimeout: time.Second})
 	if !result.tcpReachable || !result.httpReady {
 		t.Fatalf("probe = %+v", result)
 	}

@@ -73,6 +73,7 @@ tls_proxy_port=1084
 direct_dns_interface=eth0
 fallback_interface=eth1
 direct_tcp_interface=eth2
+direct_tcp_mark=0xff
 reachable_domains=custom.domains
 direct_dns={
     1.1.1.1,

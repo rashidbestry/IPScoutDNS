@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -117,6 +118,9 @@ func TestSampleConfigUsesTCPReachabilitySettings(t *testing.T) {
 	if cfg.DirectTCPInterface != "default" {
 		t.Errorf("DirectTCPInterface = %q, want default", cfg.DirectTCPInterface)
 	}
+	if cfg.DirectTCPMark != 0 {
+		t.Errorf("DirectTCPMark = %d, want 0", cfg.DirectTCPMark)
+	}
 }
 
 func TestDomainInputsResolvedBesideConfig(t *testing.T) {
@@ -222,6 +226,47 @@ direct_tcp_interface=127.0.0.1
 	}
 	if cfg.DirectTCPInterface != "127.0.0.1" {
 		t.Fatalf("DirectTCPInterface = %q, want 127.0.0.1", cfg.DirectTCPInterface)
+	}
+}
+
+func TestDirectTCPMarkConfig(t *testing.T) {
+	for _, mode := range []string{"active", "passive"} {
+		for _, tc := range []struct {
+			name    string
+			setting string
+			want    uint32
+			invalid bool
+		}{
+			{name: "omitted"},
+			{name: "disabled", setting: "direct_tcp_mark=0\n"},
+			{name: "decimal", setting: "direct_tcp_mark=255\n", want: 255},
+			{name: "hexadecimal", setting: "direct_tcp_mark=0xff\n", want: 255},
+			{name: "maximum", setting: "direct_tcp_mark=4294967295\n", want: ^uint32(0)},
+			{name: "maximum hexadecimal", setting: "direct_tcp_mark=0xffffffff\n", want: ^uint32(0)},
+			{name: "negative", setting: "direct_tcp_mark=-1\n", invalid: true},
+			{name: "overflow", setting: "direct_tcp_mark=4294967296\n", invalid: true},
+			{name: "hexadecimal overflow", setting: "direct_tcp_mark=0x100000000\n", invalid: true},
+			{name: "empty", setting: "direct_tcp_mark=\n", invalid: true},
+			{name: "non-numeric", setting: "direct_tcp_mark=invalid\n", invalid: true},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "ipscoutdns.conf")
+				contents := "mode=" + mode + "\ndirect_dns=1.1.1.1\nactive_domains_file=active.txt\npassive_domains_file=passive.txt\n" + tc.setting
+				if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+					t.Fatal(err)
+				}
+				cfg, err := loadConfig(path)
+				if tc.invalid || runtime.GOOS != "linux" && tc.want != 0 {
+					if err == nil || !strings.Contains(err.Error(), "direct_tcp_mark") {
+						t.Fatalf("loadConfig() error = %v; want direct_tcp_mark error", err)
+					}
+					return
+				}
+				if err != nil || cfg.DirectTCPMark != tc.want {
+					t.Fatalf("DirectTCPMark = %d, error = %v; want %d, nil", cfg.DirectTCPMark, err, tc.want)
+				}
+			})
+		}
 	}
 }
 

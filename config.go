@@ -59,6 +59,7 @@ type Config struct {
 	DirectDNSInterface     string // local interface name or source IP for direct DNS
 	FallbackDNSInterface   string // local interface name or source IP for fallback DNS
 	DirectTCPInterface     string // local interface name or source IP for direct reachability checks
+	DirectTCPMark          uint32 // Linux socket mark for direct TCP/TLS/HTTP checks; zero disables marking
 	TLSSOCKS5Addr          string // SOCKS5 proxy used for reachability checks
 	TLSProxyPort           int
 	CacheTTL               time.Duration
@@ -159,6 +160,9 @@ func (c Config) validateWithInterfaceValidator(validateInterface func(string) er
 	}
 	if err := validateInterfaceSelector(c.DirectTCPInterface); err != nil {
 		return fmt.Errorf("server.direct_tcp_interface: %w", err)
+	}
+	if err := validateDirectTCPMark(c.DirectTCPMark); err != nil {
+		return err
 	}
 	if c.CacheTTL <= 0 {
 		return fmt.Errorf("cache.ttl must be greater than zero")
@@ -492,6 +496,12 @@ func loadConfigWithInterfaceValidator(path string, validateInterface func(string
 				cfg.DirectDNSInterface = value
 			case "direct_tcp_interface":
 				cfg.DirectTCPInterface = value
+			case "direct_tcp_mark":
+				mark, err := strconv.ParseUint(value, 0, 32)
+				if err != nil {
+					return cfg, fmt.Errorf("%s:%d: invalid direct_tcp_mark %q: expected an unsigned 32-bit integer", path, lineNo, value)
+				}
+				cfg.DirectTCPMark = uint32(mark)
 			case "fallback_dns_interface", "fallback_interface":
 				cfg.FallbackDNSInterface = value
 			case "fallback_dns":

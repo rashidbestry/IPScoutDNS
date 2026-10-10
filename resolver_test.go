@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -59,7 +61,8 @@ func TestTLSProbeWritesRuntimeOutputs(t *testing.T) {
 
 func TestDomainOutputReachability(t *testing.T) {
 	previousConfig := currentConfig
-	t.Cleanup(func() { currentConfig = previousConfig })
+	previousLog := logger.Writer()
+	t.Cleanup(func() { currentConfig = previousConfig; logger.SetOutput(previousLog) })
 	for _, passive := range []bool{false, true} {
 		name := "active"
 		if passive {
@@ -92,7 +95,7 @@ func TestDomainOutputReachability(t *testing.T) {
 				reachable   bool
 				unreachable bool
 			}{
-				{"service failure is immediately unreachable", tlsProbeResult{}, httpProbeResult{}, false, false, false, true},
+				{"service failure is immediately unreachable", tlsProbeResult{tcpError: errors.New("connection refused")}, httpProbeResult{}, false, false, false, true},
 				{"TCP alone is insufficient", tlsProbeResult{tcpReachable: true}, httpProbeResult{}, false, false, false, true},
 				{"only ICMP success does not validate domain", tlsProbeResult{}, httpProbeResult{}, true, false, false, true},
 				{"HTTP succeeds without TLS", tlsProbeResult{}, httpProbeResult{tcpReachable: true, httpReady: true}, false, true, true, false},
@@ -100,6 +103,8 @@ func TestDomainOutputReachability(t *testing.T) {
 				{"failure immediately replaces reachable status", tlsProbeResult{}, httpProbeResult{}, false, false, false, true},
 			} {
 				t.Run(step.name, func(t *testing.T) {
+					var logs selectionLogBuffer
+					logger.SetOutput(&logs)
 					probe := func(context.Context, string, string, Config) tlsProbeResult { return step.probe }
 					httpCalls := 0
 					httpProbe := func(context.Context, string, string, Config) httpProbeResult { httpCalls++; return step.http }
@@ -113,6 +118,9 @@ func TestDomainOutputReachability(t *testing.T) {
 						}
 					}
 					wantHTTPCalls := 1
+					if step.probe.tcpError != nil && strings.Count(logs.String(), "TCP 192.0.2.1:443 failed after 2 attempts: connection refused") != 1 {
+						t.Fatalf("expected one combined TCP failure: %s", logs.String())
+					}
 					if step.probe.tcpReachable && step.probe.tlsReady {
 						wantHTTPCalls = 0
 					}

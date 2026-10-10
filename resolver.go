@@ -205,6 +205,9 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	}
 
 	ips := collectResolverIPsWithContext(ctx, domain, cfg, query)
+	if ctx.Err() != nil {
+		return "", false, false
+	}
 	if len(ips) == 0 {
 		// Without a candidate IP, no reachability probe was possible. Preserve
 		// the previous status rather than treating a DNS failure as a TCP failure.
@@ -212,6 +215,8 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		return "", false, false
 	}
 	logger.Printf("%s: collected %d unique IPv4 candidates", domain, len(ips))
+	// Combine identical connection failures across this domain's retry rounds.
+	ctx = context.WithValue(ctx, deferTCPFailureLogsKey{}, true)
 
 	checkTCPOrTLS := func(ip string) tlsProbeResult {
 		if cfg.TLSProbe {
@@ -224,7 +229,7 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		defer cancel()
 		conn, err := dialReachability(probeCtx, domain, ip, cfg)
 		if err != nil {
-			return tlsProbeResult{}
+			return tlsProbeResult{tcpError: err}
 		}
 		_ = conn.Close()
 		return tlsProbeResult{tcpReachable: true}
@@ -238,6 +243,8 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	if ctx.Err() != nil {
 		return "", false, false
 	}
+	firstTLSResults := tlsResults
+	var retryTLSResults map[string]tlsProbeResult
 	anyTCPReachable := false
 	for _, result := range tlsResults {
 		if result.tcpReachable {
@@ -255,7 +262,9 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		if ctx.Err() != nil {
 			return "", false, false
 		}
+		retryTLSResults = tlsResults
 	}
+	logTCPProbeResults(domain, ips, cfg, firstTLSResults, retryTLSResults)
 
 	domainReachable := false
 	for _, result := range tlsResults {
@@ -297,6 +306,7 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		if ctx.Err() != nil {
 			return "", false, false
 		}
+		logTCPProbeResults(domain, remaining, cfg, resumed, nil)
 		limitReached = reached
 		for ip, result := range resumed {
 			tlsResults[ip] = result
@@ -669,7 +679,7 @@ func queryDNS(ctx context.Context, domain string, server string, cfg Config) []s
 	}
 	conn, err := client.DialContext(ctx, server)
 	if err != nil {
-		logger.Printf("%s: DNS %s connection failed: %v", domain, server, err)
+		logUnlessCanceled(ctx, "%s: DNS %s connection failed: %v", domain, server, err)
 		return nil
 	}
 	defer conn.Close()
@@ -677,7 +687,7 @@ func queryDNS(ctx context.Context, domain string, server string, cfg Config) []s
 	defer stopCancel()
 	resp, _, err := client.ExchangeWithConnContext(ctx, msg, conn)
 	if err != nil {
-		logger.Printf("%s: DNS %s query failed: %v", domain, server, err)
+		logUnlessCanceled(ctx, "%s: DNS %s query failed: %v", domain, server, err)
 		return nil
 	}
 
@@ -686,7 +696,7 @@ func queryDNS(ctx context.Context, domain string, server string, cfg Config) []s
 
 func queryDNSSOCKS5(ctx context.Context, domain, socksAddr, dnsAddr string) []string {
 	fail := func(stage string, err error) []string {
-		logger.Printf("%s: SOCKS5 DNS %s %s failed: %v", domain, dnsAddr, stage, err)
+		logUnlessCanceled(ctx, "%s: SOCKS5 DNS %s %s failed: %v", domain, dnsAddr, stage, err)
 		return nil
 	}
 	msg := new(dns.Msg)
@@ -700,7 +710,7 @@ func queryDNSSOCKS5(ctx context.Context, domain, socksAddr, dnsAddr string) []st
 
 	conn, err := dialSOCKS5(ctx, socksAddr, dnsAddr)
 	if err != nil {
-		logger.Printf("%s: SOCKS5 DNS %s failed: %v", domain, dnsAddr, err)
+		logUnlessCanceled(ctx, "%s: SOCKS5 DNS %s failed: %v", domain, dnsAddr, err)
 		return nil
 	}
 	defer conn.Close()
@@ -781,13 +791,13 @@ func queryDoHSOCKS5(ctx context.Context, domain, endpoint, socksAddr string) []s
 
 	resp, err := client.Do(req)
 	if err != nil {
-		logger.Printf("%s: SOCKS5 DoH %s failed: %v", domain, endpoint, err)
+		logUnlessCanceled(ctx, "%s: SOCKS5 DoH %s failed: %v", domain, endpoint, err)
 		return nil
 	}
-	return readDoHResponse(domain, endpoint, resp)
+	return readDoHResponse(ctx, domain, endpoint, resp)
 }
 
-func readDoHResponse(domain, endpoint string, resp *http.Response) []string {
+func readDoHResponse(ctx context.Context, domain, endpoint string, resp *http.Response) []string {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		logger.Printf("%s: SOCKS5 DoH %s returned HTTP %s", domain, endpoint, resp.Status)
@@ -796,7 +806,7 @@ func readDoHResponse(domain, endpoint string, resp *http.Response) []string {
 
 	respWire, err := io.ReadAll(io.LimitReader(resp.Body, 65535))
 	if err != nil {
-		logger.Printf("%s: SOCKS5 DoH %s response read failed: %v", domain, endpoint, err)
+		logUnlessCanceled(ctx, "%s: SOCKS5 DoH %s response read failed: %v", domain, endpoint, err)
 		return nil
 	}
 	msgResp := new(dns.Msg)
@@ -816,11 +826,7 @@ func resolverIPv4Response(domain, server string, resp *dns.Msg) []string {
 		logger.Printf("%s: resolver %s returned DNS %s", domain, server, dns.RcodeToString[resp.Rcode])
 		return nil
 	}
-	ips := extractIPv4(resp)
-	if len(ips) == 0 {
-		logger.Printf("%s: resolver %s returned no IPv4 addresses", domain, server)
-	}
-	return ips
+	return extractIPv4(resp)
 }
 
 func extractIPv4(resp *dns.Msg) []string {

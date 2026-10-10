@@ -341,6 +341,10 @@ func TestPassiveResolvesFreshAndPreservesStatusOnLookupFailure(t *testing.T) {
 }
 
 func TestDirectDNSCancellation(t *testing.T) {
+	previousLog := logger.Writer()
+	t.Cleanup(func() { logger.SetOutput(previousLog) })
+	var logs selectionLogBuffer
+	logger.SetOutput(&logs)
 	upstream, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -370,6 +374,9 @@ func TestDirectDNSCancellation(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("DNS cancellation waited for the one-minute timeout")
+	}
+	if logs.String() != "" {
+		t.Fatalf("expected cancellation should be quiet: %s", logs.String())
 	}
 }
 

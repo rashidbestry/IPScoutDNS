@@ -17,6 +17,15 @@ type tlsProbeResult struct {
 	tcpReachable  bool
 	tlsReady      bool
 	internalError bool // Remote TLS internal_error alert after TCP success.
+	tcpError      error
+}
+
+type deferTCPFailureLogsKey struct{}
+
+func logUnlessCanceled(ctx context.Context, format string, args ...any) {
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		logger.Printf(format, args...)
+	}
 }
 
 type httpProbeResult struct {
@@ -33,7 +42,9 @@ func testHTTPPort(parent context.Context, domain string, ip string, cfg Config, 
 	defer cancel()
 	conn, err := dialReachabilityPort(ctx, domain, ip, cfg, port)
 	if err != nil {
-		logTCPProbeFailure(domain, ip, port, cfg, "HTTP TCP", err)
+		if !errors.Is(parent.Err(), context.Canceled) {
+			logTCPProbeFailure(domain, ip, port, cfg, "HTTP TCP", err, 1)
+		}
 		return httpProbeResult{}
 	}
 	defer conn.Close()
@@ -49,7 +60,7 @@ func testHTTPPort(parent context.Context, domain string, ip string, cfg Config, 
 		err = req.Write(conn)
 	}
 	if err != nil {
-		logger.Printf("%s: HTTP request to %s failed: %v", domain, ip, err)
+		logUnlessCanceled(parent, "%s: HTTP request to %s failed: %v", domain, ip, err)
 		return result
 	}
 	// Read headers only, with a size limit. Redirect responses count as
@@ -58,7 +69,7 @@ func testHTTPPort(parent context.Context, domain string, ip string, cfg Config, 
 	for {
 		resp, err := http.ReadResponse(reader, req)
 		if err != nil {
-			logger.Printf("%s: HTTP response from %s failed: %v", domain, ip, err)
+			logUnlessCanceled(parent, "%s: HTTP response from %s failed: %v", domain, ip, err)
 			return result
 		}
 		_ = resp.Body.Close()
@@ -82,8 +93,10 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsPr
 	}
 	conn, err := dialReachability(ctx, domain, ip, cfg)
 	if err != nil {
-		logTCPProbeFailure(domain, ip, port, cfg, "TCP", err)
-		return tlsProbeResult{}
+		if parent.Value(deferTCPFailureLogsKey{}) != true && !errors.Is(parent.Err(), context.Canceled) {
+			logTCPProbeFailure(domain, ip, port, cfg, "TCP", err, 1)
+		}
+		return tlsProbeResult{tcpError: err}
 	}
 	defer conn.Close()
 
@@ -104,20 +117,22 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsPr
 		retryConn, retryErr := dialReachability(ctx, domain, ip, cfg)
 		if retryErr != nil {
 			err = retryErr
-			logTCPProbeFailure(domain, ip, port, cfg, "TLS ALPN retry TCP", err)
+			if !errors.Is(parent.Err(), context.Canceled) {
+				logTCPProbeFailure(domain, ip, port, cfg, "TLS ALPN retry TCP", err, 1)
+			}
 		} else {
 			defer retryConn.Close()
 			retryConfig := tlsConfig.Clone()
 			retryConfig.NextProtos = []string{"h2", "http/1.1"}
 			err = tls.Client(retryConn, retryConfig).HandshakeContext(ctx)
 			if err != nil {
-				logger.Printf("%s: TLS %s failed after ALPN retry: %v", domain, ip, err)
+				logUnlessCanceled(parent, "%s: TLS %s failed after ALPN retry: %v", domain, ip, err)
 			} else {
 				logger.Printf("%s: TLS %s passed after ALPN retry", domain, ip)
 			}
 		}
 	} else if err != nil {
-		logger.Printf("%s: TLS handshake %s failed after TCP success: %v", domain, ip, err)
+		logUnlessCanceled(parent, "%s: TLS handshake %s failed after TCP success: %v", domain, ip, err)
 	}
 	return tlsProbeResult{
 		tcpReachable:  true,
@@ -126,7 +141,7 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsPr
 	}
 }
 
-func logTCPProbeFailure(domain, ip string, port int, cfg Config, probe string, err error) {
+func compactTCPError(err error) error {
 	// Strip socket address and syscall wrappers, retaining contextual errors
 	// such as SO_MARK failures and SOCKS5 handshake diagnostics.
 	for {
@@ -136,12 +151,38 @@ func logTCPProbeFailure(domain, ip string, port int, cfg Config, probe string, e
 		case *os.SyscallError:
 			err = wrapped.Err
 		default:
-			route := cfg.TLSRoute
-			if route == "proxy" {
-				route += " via " + cfg.TLSSOCKS5Addr
-			}
-			logger.Printf("%s: %s %s failed (route=%s): %v", domain, probe, net.JoinHostPort(ip, strconv.Itoa(port)), route, err)
-			return
+			return err
+		}
+	}
+}
+
+func logTCPProbeFailure(domain, ip string, port int, cfg Config, probe string, err error, attempts int) {
+	details := ""
+	if cfg.TLSRoute == "proxy" {
+		details = " via SOCKS5 " + cfg.TLSSOCKS5Addr
+	}
+	if attempts > 1 {
+		details += fmt.Sprintf(" after %d attempts", attempts)
+	}
+	logger.Printf("%s: %s %s failed%s: %v", domain, probe, net.JoinHostPort(ip, strconv.Itoa(port)), details, compactTCPError(err))
+}
+
+func logTCPProbeResults(domain string, ips []string, cfg Config, first, retry map[string]tlsProbeResult) {
+	port := cfg.TLSPort
+	if port == 0 {
+		port = 443
+	}
+	for _, ip := range ips {
+		firstErr, retryErr := first[ip].tcpError, retry[ip].tcpError
+		if firstErr != nil && retryErr != nil && compactTCPError(firstErr).Error() == compactTCPError(retryErr).Error() {
+			logTCPProbeFailure(domain, ip, port, cfg, "TCP", retryErr, 2)
+			continue
+		}
+		if firstErr != nil {
+			logTCPProbeFailure(domain, ip, port, cfg, "TCP", firstErr, 1)
+		}
+		if retryErr != nil {
+			logTCPProbeFailure(domain, ip, port, cfg, "TCP retry", retryErr, 1)
 		}
 	}
 }

@@ -205,6 +205,10 @@ func TestTLSALPNRetryGating(t *testing.T) {
 
 func TestTLSALPNRetryCancellationAndTimeout(t *testing.T) {
 	t.Run("canceled before retry", func(t *testing.T) {
+		previousLog := logger.Writer()
+		t.Cleanup(func() { logger.SetOutput(previousLog) })
+		var logs selectionLogBuffer
+		logger.SetOutput(&logs)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		cfg, _, attempts := startALPNProbeServer(t, false, 71, 0, cancel, false)
@@ -212,8 +216,15 @@ func TestTLSALPNRetryCancellationAndTimeout(t *testing.T) {
 		if result.tlsReady || attempts.Load() != 1 {
 			t.Fatalf("connections=%d result=%+v", attempts.Load(), result)
 		}
+		if logs.String() != "" {
+			t.Fatalf("expected cancellation should be quiet: %s", logs.String())
+		}
 	})
 	t.Run("retry shares candidate timeout", func(t *testing.T) {
+		previousLog := logger.Writer()
+		t.Cleanup(func() { logger.SetOutput(previousLog) })
+		var logs selectionLogBuffer
+		logger.SetOutput(&logs)
 		cfg, _, attempts := startALPNProbeServer(t, false, 71, 0, func() { time.Sleep(200 * time.Millisecond) }, true)
 		cfg.TLSTimeout = 400 * time.Millisecond
 		start := time.Now()
@@ -221,6 +232,9 @@ func TestTLSALPNRetryCancellationAndTimeout(t *testing.T) {
 		elapsed := time.Since(start)
 		if result.tlsReady || !result.tcpReachable || attempts.Load() != 2 || elapsed >= 550*time.Millisecond {
 			t.Fatalf("connections=%d result=%+v elapsed=%s; retry must share 400ms budget", attempts.Load(), result, elapsed)
+		}
+		if !strings.Contains(logs.String(), "context deadline exceeded") {
+			t.Fatalf("actual probe timeout must remain visible: %s", logs.String())
 		}
 	})
 }

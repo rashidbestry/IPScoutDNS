@@ -132,6 +132,10 @@ func TestHTTPProbeRequiresHTTPResponse(t *testing.T) {
 }
 
 func TestHTTPProbeCancellation(t *testing.T) {
+	previousLog := logger.Writer()
+	t.Cleanup(func() { logger.SetOutput(previousLog) })
+	var logs selectionLogBuffer
+	logger.SetOutput(&logs)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,5 +154,8 @@ func TestHTTPProbeCancellation(t *testing.T) {
 	result := testHTTPPort(ctx, "example.com", ip, Config{TLSRoute: "direct", TLSTimeout: time.Second}, port)
 	if !result.tcpReachable || result.httpReady {
 		t.Fatalf("probe = %+v", result)
+	}
+	if logs.String() != "" {
+		t.Fatalf("expected cancellation should be quiet: %s", logs.String())
 	}
 }

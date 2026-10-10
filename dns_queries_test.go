@@ -259,7 +259,10 @@ func TestResolverResponseDiagnostics(t *testing.T) {
 			}
 			want := "returned DNS " + dns.RcodeToString[rcode]
 			if rcode == dns.RcodeSuccess {
-				want = "returned no IPv4 addresses"
+				if logs.String() != "" {
+					t.Fatalf("successful empty response should be quiet: %s", logs.String())
+				}
+				return
 			}
 			if !strings.Contains(logs.String(), want) {
 				t.Fatalf("missing DNS response diagnostic: %s", logs.String())
@@ -306,7 +309,7 @@ func TestDoHResponseDiagnostics(t *testing.T) {
 	}{
 		{"rate limited", 429, "", "HTTP 429 Too Many Requests", ""},
 		{"forbidden", 403, "", "HTTP 403 Forbidden", ""},
-		{"HTTP 200 without A records", 200, string(emptyDNS), "returned no IPv4 addresses", ""},
+		{"HTTP 200 without A records", 200, string(emptyDNS), "", ""},
 		{"HTTP 200 with invalid DNS body", 200, "invalid", "invalid DNS response", ""},
 		{"HTTP 200 with usable A record", 200, string(validDNS), "", "192.0.2.1"},
 	} {
@@ -316,7 +319,7 @@ func TestDoHResponseDiagnostics(t *testing.T) {
 			resp := &http.Response{StatusCode: step.status, Status: fmt.Sprintf("%d %s", step.status, http.StatusText(step.status)),
 				Header: http.Header{"Content-Type": []string{"application/dns-message"}},
 				Body:   io.NopCloser(strings.NewReader(step.body))}
-			got := readDoHResponse("test.example", "https://resolver/dns-query", resp)
+			got := readDoHResponse(context.Background(), "test.example", "https://resolver/dns-query", resp)
 			if (step.wantIP == "" && len(got) != 0) || (step.wantIP != "" && (len(got) != 1 || got[0] != step.wantIP)) {
 				t.Fatalf("IPs = %v, want %q", got, step.wantIP)
 			}

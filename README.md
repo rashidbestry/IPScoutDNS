@@ -1,6 +1,6 @@
 # IPScoutDNS
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![OpenWrt](https://img.shields.io/badge/OpenWrt-multiple_architectures-blue)](https://github.com/rashidbestry/IPScoutDNS/wiki/OpenWrt)
 
 ## What is it?
 
@@ -8,7 +8,7 @@ A DNS service that discovers IPv4 addresses, checks their reachability, and sele
 
 ## Where is it useful?
 
-When DNS answers contain unreachable addresses or filtered by ISP, when generating hosts lists, or when comparing reachability through direct and proxy routes.
+Useful when DNS answers contain unreachable addresses or are filtered by an ISP, for generating hosts lists, and for comparing reachability through direct and proxy routes.
 
 ## Capabilities
 

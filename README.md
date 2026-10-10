@@ -1,156 +1,46 @@
 # IPScoutDNS
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![OpenWrt](https://img.shields.io/badge/OpenWrt-multiple_architectures-blue)](https://openwrt.org/)
 
-A DNS service for IPv4 (A) records, supporting plain DNS, DNS over HTTPS (DoH), and DNS over TLS (DoT). It offers TCP/TLS/HTTP/ICMP reachability checks and direct, interface-bound, or SOCKS5 routing. ICMP is disabled on proxy routes.
+## What is it?
+
+A DNS service that discovers IPv4 addresses, checks their reachability, and selects a working address. It serves filtered DNS answers on demand or scans domain lists on a schedule.
+
+## Where is it useful?
+
+When DNS answers contain unreachable addresses or filtered by ISP, when generating hosts lists, or when comparing reachability through direct and proxy routes.
+
+## Capabilities
+
+- [Active DNS serving](https://github.com/rashidbestry/IPScoutDNS/wiki/Active-mode) with regex filtering, caching and fallback; [Passive scans](https://github.com/rashidbestry/IPScoutDNS/wiki/Passive-mode) with interval or daily schedules.
+- [TCP, TLS, HTTP and ICMP probes](https://github.com/rashidbestry/IPScoutDNS/wiki/Reachability-probes), configurable concurrency and successful-IP limits.
+- [Plain DNS and HTTPS DoH discovery](https://github.com/rashidbestry/IPScoutDNS/wiki/DNS-and-routing), direct/interface-bound connections and SOCKS5 routing. ICMP runs only on direct routes.
+- [Hosts/domain/IP outputs and rotating logs](https://github.com/rashidbestry/IPScoutDNS/wiki/Outputs-and-logging), plus startup and post-scan command hooks.
+
+## Minimum requirements
+
+- **Windows:** Windows 10+ or Windows Server 2016+.
+- **Linux:** kernel 3.2+; some architectures require newer kernels.
+- **OpenWrt:** oldest tested baseline is 12.09 on x86 in QEMU; other CPU/firmware combinations require device testing.
+- **RAM/storage:** depends on domain count, concurrency and log retention; no fixed workload minimum is established.
+
+See [OpenWrt compatibility and device requirements](https://github.com/rashidbestry/IPScoutDNS/wiki/OpenWrt#compatibility-and-small-devices).
+
+## Supported release architectures
+
+| Platform        | Architectures                                                                   |
+| --------------- | ------------------------------------------------------------------------------- |
+| Windows / Linux | `amd64`, `arm64`                                                                |
+| OpenWrt         | x86, x86-64, ARM, ARM64, MIPS/MIPS64 in both byte orders, RISC-V64, LoongArch64 |
+
+[OpenWrt package aliases and archive families](https://github.com/rashidbestry/IPScoutDNS/wiki/OpenWrt#cpu-families-and-manual-archives).
 
 ## Installation
 
-Download the package for your OS and architecture from [GitHub Releases](https://github.com/rashidbestry/IPScoutDNS/releases/latest). Linux and Windows archives support `amd64` and `arm64`; extract the binary and its `config/` folder together.
+[Download releases](https://github.com/rashidbestry/IPScoutDNS/releases/latest) · [Windows/Linux installation](https://github.com/rashidbestry/IPScoutDNS/wiki/Installation) · [OpenWrt installation](https://github.com/rashidbestry/IPScoutDNS/wiki/OpenWrt)
 
-### OpenWrt
+## Usage
 
-Releases include IPKs for opkg firmware, APKs for OpenWrt 25.12+, and manual-install archives for ten CPU families: x86, x86-64, ARM, ARM64, MIPS/MIPS64 in both byte orders, RISC-V64, and LoongArch64. Packages use architecture names rather than board families; `aarch64_generic` is usable beyond Rockchip.
+[Configuration](https://github.com/rashidbestry/IPScoutDNS/wiki/Configuration) · [Active mode](https://github.com/rashidbestry/IPScoutDNS/wiki/Active-mode) · [Passive mode](https://github.com/rashidbestry/IPScoutDNS/wiki/Passive-mode)
 
-The oldest tested compatibility baseline is OpenWrt 12.09 on x86 with Linux 3.3.8. CI boots original 12.09 and 14.07 x86 images with 64 MiB RAM to check installation, DNS fallback, service start/stop, config preservation, and removal. Other CPU/firmware combinations require device testing; Linux 3.2+ and a supported CPU are required, and newer CPU families need firmware that supports their hardware. See [architecture names, requirements, and manual installation](packaging/openwrt/README.md).
-
-On opkg firmware, identify the device's architecture with `opkg print-architecture`. Set `ARCH` to the matching device architecture, such as `mips_24kc`, `mipsel_24kc`, `arm_cortex-a9`, `aarch64_cortex-a53`, or the legacy `x86`:
-
-```sh
-VERSION="<version>"
-ARCH="<device-architecture>"
-wget "https://github.com/rashidbestry/IPScoutDNS/releases/download/v${VERSION}/ipscoutdns-${VERSION}-openwrt-${ARCH}.ipk"
-opkg install "./ipscoutdns-${VERSION}-openwrt-${ARCH}.ipk"
-```
-
-On APK firmware, identify the architecture with `apk --print-arch`:
-
-```sh
-VERSION="<version>"
-ARCH="$(apk --print-arch)"
-wget "https://github.com/rashidbestry/IPScoutDNS/releases/download/v${VERSION}/ipscoutdns-${VERSION}-openwrt-${ARCH}.apk"
-apk add --allow-untrusted "./ipscoutdns-${VERSION}-openwrt-${ARCH}.apk"
-```
-
-`--allow-untrusted` permits installation without a trusted package signature. Avoid forcing a mismatched architecture; use the matching manual-install archive if the firmware's architecture name is not listed.
-
-## Requirements
-
-- Prebuilt binaries do not require Go. Building from source requires the Go version in [go.mod](go.mod).
-- ICMP probing requires the system `ping` command. OpenWrt releases include a current Mozilla CA bundle for TLS; keep the package and the router's clock current.
-- Memory and storage requirements depend on domain count, concurrency, and saved log limits.
-
-## Run
-
-Edit [config/ipscoutdns.conf](config/ipscoutdns.conf) before starting. On OpenWrt, edit `/etc/ipscoutdns.conf`; domain lists are installed under `/etc/ipscoutdns/`.
-
-- `mode=active`: DNS server that processes A queries on demand, applies regex filters from [active-domains.txt](config/active-domains.txt), and writes host outputs.
-- `mode=passive`: scheduled resolution of hostnames in [passive-domains.txt](config/passive-domains.txt).
-
-Set `passive_resolve_time=HH:MM` for daily passes in the OS timezone. On Linux,
-IPScoutDNS also reads OpenWrt's `/etc/TZ`, including POSIX daylight-saving rules,
-without requiring a timezone package or init-script changes. An explicit `TZ`
-environment setting takes precedence. Startup logs show the detected timezone;
-restart after changing timezone settings. Scheduled waits check the OS clock at
-least every 30 seconds: a forward correction past the deadline starts one pass,
-a backward correction postpones it, and an attempted local date is not repeated.
-Missed dates are not replayed. When a daily time is set, `passive_resolve_interval`
-is ignored. Leave the time blank to run immediately and then wait the configured
-interval after each completed pass.
-
-Startup logs include the release version (`dev` for local builds) and a two-column
-"Other configs" block containing the timezone. Domains with no IPv4 candidates
-are omitted from result logs. Each completed resolution with IPv4 candidates
-logs `collected[N]` unique IPv4 candidates and `reached[N]` working IPs found,
-followed by the selected `WORKING IP` and protocol. Failed selections show
-`TCP[] TLS[] HTTP[] ICMP[] NO WORKING IP`; `X` marks an attempted stage with no
-success, while empty brackets mean success, disabled or not attempted. These
-summaries replace per-candidate probe details. Cache hits show `CACHE HIT` alone;
-file-write and DNS fallback transport errors still appear separately.
-
-Release bundles preserve `config/ipscoutdns.conf` byte-for-byte. Domain-file paths resolve beside the config; OpenWrt package builds using `/etc/ipscoutdns.conf` resolve the default domain filenames under `/etc/ipscoutdns/`. The sample uses port 53; choose a free listener port.
-
-Optional `pre_launch_commands` and `passive_post_commands` lists accept one shell
-command per line inside `{` / `}` blocks, without comma separators. PRE runs once
-at startup in either mode, before listeners or scheduling. POST runs after each
-completed Passive pass and successful output copying; skipped or interrupted
-passes do not run POST. Empty lists disable hooks. Commands run sequentially and
-wait for completion, using `cmd.exe` on Windows or `/bin/sh` on Linux/OpenWrt.
-Each command has its own shell, with the service's working directory, environment
-and permissions. Command output is discarded; failures are reported by command
-number. All commands are attempted unless shutdown cancels the hook. PRE failures
-stop startup; POST failures allow future passes. The Passive interval starts after
-POST finishes, and daily scheduling skips any dates missed while commands run.
-
-On Linux/OpenWrt, `direct_tcp_mark` sets a socket mark for direct TCP/TLS/HTTP probes; `0` disables marking. Set `direct_tcp_mark=255` (or `0xff`) when your firewall already exempts that mark, such as the Passwall2 bypass rule. It requires root or a suitable network capability and preserves `direct_tcp_interface` source binding. A marking failure fails the probe. DNS, ICMP, and SOCKS5 connections are not marked by this setting; nonzero marks are rejected on other operating systems.
-
-Regular Linux writes output files to `./outputs/` and saved logs to `./logs/`, relative to the working directory, without copying. Windows keeps outputs beside the executable and saved logs in its `logs/` folder.
-
-Only OpenWrt package builds use `/tmp/ipscoutdns/` and copy outputs to `/etc/ipscoutdns/outputs/` after passive passes or at `active_copy_interval` in active mode. Saved logs are copied to `/etc/ipscoutdns/logs/` after passive passes, at `active_log_copy_interval` in active mode, and once more during a clean active shutdown. The package workflow builds with `-ldflags="-X main.openWrtPackage=true"`; ordinary Linux builds keep the local layout even when run on OpenWrt.
-
-**Windows:**
-
-```powershell
-.\ipscoutdns.exe --config .\config\ipscoutdns.conf
-```
-
-**Linux:**
-
-```sh
-./ipscoutdns --config ./config/ipscoutdns.conf
-```
-
-**OpenWrt:** the service is disabled after installation.
-
-```sh
-/etc/init.d/ipscoutdns start
-/etc/init.d/ipscoutdns enable
-```
-
-## DNS query controls
-
-`dns_query_parallel=4` limits concurrent upstream DNS queries across the entire
-service in both Active and Passive modes. Direct DNS, SOCKS5 DNS, DoH, and Active
-fallback queries share this limit. Additional queries wait for a slot;
-set `dns_query_parallel=0` for unlimited concurrent upstream DNS queries.
-`passive_resolve_parallel` controls domain jobs and `parallel_tests` controls
-candidate-IP probes separately.
-
-`dns_timeout` applies to each upstream query after it acquires a slot, so time
-spent in the queue does not consume its network timeout. Caller cancellation
-and service shutdown stop queued and running queries. A domain's full discovery
-round can take longer than `dns_timeout` when many resolvers are configured;
-remove consistently failing resolvers to avoid spending their timeout on every
-scan. Existing TLS/HTTP selection and `hosts_max_ips_per_domain` rules are unchanged.
-
-Resolver logs report DNS response codes and A-record counts, including
-`NOERROR` with zero A records, `NXDOMAIN`, `SERVFAIL`, and `REFUSED`. DoH logs also
-identify HTTP errors such as `403` and `429`, unreadable or malformed DNS bodies,
-and candidates discarded by IPv4 validation. An HTTP `200` response alone does
-not mean a resolver supplied usable IPv4 addresses.
-
-## Early HTTP fallback
-
-`http_fallback_tls_alerts=2` starts HTTP probing early when that many distinct
-candidate IPs return a remote TLS `internal_error` alert after TCP success and
-no TLS candidate has succeeded. Both TLS and HTTP probes must be enabled.
-The same rule applies in Active and Passive modes; `0` disables early fallback.
-Timeouts, EOFs, and other TLS failures do not count toward this threshold.
-
-If HTTP succeeds, selection uses `[HTTP]` and respects `hosts_max_ips_per_domain`.
-Remaining TLS candidates stay unknown, so a later TLS-capable IP may be skipped.
-If HTTP fails, remaining TLS checks resume before final classification. The
-threshold resets for each fresh resolution; a later pass tries TLS again.
-
-Check out FLOWCHART [FLOWCHART](FLOWCHART.md).
-
-## TLS ALPN compatibility retry
-
-When a TLS probe receives the remote `insufficient_security` alert, it retries
-once on a fresh connection advertising ALPN `h2` and `http/1.1`. The retry uses
-the same candidate IP, hostname, port, route, and direct-interface selection,
-and shares the original candidate timeout. This applies in Active and Passive
-modes without a new config setting. A successful retry qualifies the IP for
-`[TLS]` selection. Other alerts, EOFs, and timeouts do not trigger this retry.
-
+[Full wiki](https://github.com/rashidbestry/IPScoutDNS/wiki) · [Flowchart](https://github.com/rashidbestry/IPScoutDNS/wiki/FLOWCHART) · [Troubleshooting](https://github.com/rashidbestry/IPScoutDNS/wiki/Troubleshooting) · [Report an issue](https://github.com/rashidbestry/IPScoutDNS/issues)

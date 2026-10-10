@@ -44,17 +44,14 @@ func TestDomainStatusChangesImmediately(t *testing.T) {
 	}
 }
 
-func TestPingRetriesAndStopsAfterSuccess(t *testing.T) {
+func TestPingSingleAttempt(t *testing.T) {
 	calls := 0
 	got := pingIPWithRunner(context.Background(), "192.0.2.1", func(context.Context, string) ([]byte, error) {
 		calls++
-		if calls < 3 {
-			return []byte("Request timed out."), errors.New("exit status 1")
-		}
-		return nil, nil
+		return []byte("Request timed out."), errors.New("exit status 1")
 	})
-	if !got || calls != 3 {
-		t.Fatalf("reachable = %v, calls = %d; want true, 3", got, calls)
+	if got || calls != 1 {
+		t.Fatalf("reachable = %v, calls = %d; want false, 1", got, calls)
 	}
 	calls = 0
 	got = pingIPWithRunner(context.Background(), "192.0.2.1", func(context.Context, string) ([]byte, error) {
@@ -66,17 +63,13 @@ func TestPingRetriesAndStopsAfterSuccess(t *testing.T) {
 	}
 }
 
-func TestPingFailureAndCancellation(t *testing.T) {
+func TestPingCancellation(t *testing.T) {
 	calls := 0
 	run := func(context.Context, string) ([]byte, error) {
 		calls++
 		return nil, errors.New("ping failed")
 	}
-	if pingIPWithRunner(context.Background(), "192.0.2.1", run) || calls != 3 {
-		t.Fatalf("persistent failure calls = %d, want 3", calls)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
-	calls = 0
 	got := pingIPWithRunner(ctx, "192.0.2.1", func(context.Context, string) ([]byte, error) {
 		calls++
 		cancel()
@@ -84,6 +77,10 @@ func TestPingFailureAndCancellation(t *testing.T) {
 	})
 	if got || calls != 1 {
 		t.Fatalf("canceled ping reachable = %v, calls = %d", got, calls)
+	}
+	calls = 0
+	if pingIPWithRunner(ctx, "192.0.2.1", run) || calls != 0 {
+		t.Fatalf("already canceled ping calls = %d, want 0", calls)
 	}
 }
 

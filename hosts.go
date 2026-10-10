@@ -37,24 +37,18 @@ func pingIPContext(parent context.Context, ip string, interfaceSelector string) 
 }
 
 func pingIPWithRunner(parent context.Context, ip string, run func(context.Context, string) ([]byte, error)) bool {
-	if ip == "" {
+	if ip == "" || parent.Err() != nil {
 		return false
 	}
-	for attempt := 1; attempt <= 3; attempt++ {
-		if parent.Err() != nil {
-			return false
-		}
-		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
-		output, err := run(ctx, ip)
-		ctxErr := ctx.Err()
-		cancel()
-		if err == nil && ctxErr == nil {
-			return true
-		}
-		if parent.Err() != nil {
-			return false
-		}
-		logger.Printf("%s: ICMP attempt %d/3 failed: %v (context=%v); %s", ip, attempt, err, ctxErr, strings.TrimSpace(string(output)))
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	output, err := run(ctx, ip)
+	ctxErr := ctx.Err()
+	cancel()
+	if err == nil && ctxErr == nil {
+		return true
+	}
+	if parent.Err() == nil {
+		logger.Printf("%s: ICMP probe failed: %v (context=%v); %s", ip, err, ctxErr, strings.TrimSpace(string(output)))
 	}
 	return false
 }

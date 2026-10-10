@@ -48,7 +48,29 @@ func pingIPWithRunner(parent context.Context, ip string, run func(context.Contex
 		return true
 	}
 	if parent.Err() == nil {
-		logger.Printf("%s: ICMP probe failed: %v (context=%v); %s", ip, err, ctxErr, strings.TrimSpace(string(output)))
+		reason := fmt.Sprint(err)
+		text := strings.TrimSpace(string(output))
+		if ctxErr != nil {
+			reason = ctxErr.Error()
+		} else {
+			// Retain command diagnostics without the ping banner or statistics.
+			diagnostic := ""
+			for _, line := range strings.Split(text, "\n") {
+				line = strings.TrimSpace(line)
+				lower := strings.ToLower(line)
+				if line == "" || strings.HasPrefix(lower, "ping ") || strings.HasPrefix(lower, "pinging ") || strings.HasPrefix(line, "---") || strings.Contains(lower, "packets transmitted") || strings.HasPrefix(lower, "packets:") || lower == "request timed out." {
+					continue
+				}
+				diagnostic = line
+				break
+			}
+			if diagnostic != "" {
+				reason += "; " + diagnostic
+			} else if strings.Contains(text, "0 packets received") || strings.Contains(text, "Received = 0") || text == "Request timed out." {
+				reason = "no reply"
+			}
+		}
+		logger.Printf("%s: ICMP probe failed: %s", ip, strings.Join(strings.Fields(reason), " "))
 	}
 	return false
 }

@@ -169,8 +169,11 @@ func TestTLSALPNRetrySelection(t *testing.T) {
 				if first.name != domain || second.name != domain || len(first.protocols) != 0 || !reflect.DeepEqual(second.protocols, []string{"h2", "http/1.1"}) {
 					t.Fatalf("ClientHello first=%+v second=%+v", first, second)
 				}
-				if !strings.Contains(logs.String(), "TLS ALPN retry succeeded") || !strings.Contains(logs.String(), "WORKING IP = 192.0.2.1 [TLS]") {
+				if strings.Count(logs.String(), "passed after ALPN retry") != 1 || !strings.Contains(logs.String(), "WORKING IP = 192.0.2.1 [TLS]") {
 					t.Fatalf("logs=%s", logs.String())
+				}
+				if strings.Contains(logs.String(), "failed after TCP success") || strings.Contains(logs.String(), "testing ") {
+					t.Fatalf("unexpected probe progress or recovered failure: %s", logs.String())
 				}
 			})
 		}

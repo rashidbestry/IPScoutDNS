@@ -233,9 +233,6 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 		return candidateProbePassed(cfg, result, httpProbeResult{}, false)
 	}
 	tlsResults, limitReached, earlyHTTP := runTLSChecksWithHTTPFallback(ctx, ips, cfg, func(ip string) tlsProbeResult {
-		if cfg.TCPProbe || cfg.TLSProbe {
-			logger.Printf("%s: TCP/TLS testing %s", domain, ip)
-		}
 		return checkTCPOrTLS(ip)
 	}, tlsPassed)
 	if ctx.Err() != nil {
@@ -328,7 +325,6 @@ func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, 
 	// reachability after a failed proxy connection.
 	if !limitReached && cfg.ICMPProbe && cfg.TLSRoute != "proxy" {
 		icmpResults, limitReached = runIPChecksLimited(ctx, tcpFailed, cfg.MaxParallelTests, cfg.HostsMaxIPsPerDomain, func(ip string) bool {
-			logger.Printf("%s: ICMP testing %s after TCP failure", domain, ip)
 			return pingCheck(ip)
 		}, func(result bool) bool { return candidateProbePassed(cfg, tlsProbeResult{}, httpProbeResult{}, result) })
 	}
@@ -816,12 +812,13 @@ func resolverIPv4Response(domain, server string, resp *dns.Msg) []string {
 		logger.Printf("%s: resolver %s returned no DNS message", domain, server)
 		return nil
 	}
-	ips := extractIPv4(resp)
-	// Include successful empty responses: HTTP 200 alone does not establish
-	// that the resolver supplied any A records for the requested domain.
-	logger.Printf("%s: resolver %s returned DNS %s with %d A records", domain, server, dns.RcodeToString[resp.Rcode], len(ips))
 	if resp.Rcode != dns.RcodeSuccess {
+		logger.Printf("%s: resolver %s returned DNS %s", domain, server, dns.RcodeToString[resp.Rcode])
 		return nil
+	}
+	ips := extractIPv4(resp)
+	if len(ips) == 0 {
+		logger.Printf("%s: resolver %s returned no IPv4 addresses", domain, server)
 	}
 	return ips
 }

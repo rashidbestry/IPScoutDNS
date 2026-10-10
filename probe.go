@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 )
 
@@ -32,7 +33,7 @@ func testHTTPPort(parent context.Context, domain string, ip string, cfg Config, 
 	defer cancel()
 	conn, err := dialReachabilityPort(ctx, domain, ip, cfg, port)
 	if err != nil {
-		logger.Printf("%s: HTTP TCP probe %s:%d failed (route=%s): %v", domain, ip, port, cfg.TLSRoute, err)
+		logTCPProbeFailure(domain, ip, port, cfg, "HTTP TCP", err)
 		return httpProbeResult{}
 	}
 	defer conn.Close()
@@ -75,9 +76,13 @@ func testHTTPPort(parent context.Context, domain string, ip string, cfg Config, 
 func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsProbeResult {
 	ctx, cancel := reachabilityContext(parent, cfg)
 	defer cancel()
+	port := cfg.TLSPort
+	if port == 0 {
+		port = 443
+	}
 	conn, err := dialReachability(ctx, domain, ip, cfg)
 	if err != nil {
-		logger.Printf("%s: TCP probe %s failed (route=%s, proxy=%s): %v", domain, ip, cfg.TLSRoute, cfg.TLSSOCKS5Addr, err)
+		logTCPProbeFailure(domain, ip, port, cfg, "TCP", err)
 		return tlsProbeResult{}
 	}
 	defer conn.Close()
@@ -92,34 +97,52 @@ func testTLS(parent context.Context, domain string, ip string, cfg Config) tlsPr
 	}
 	tlsConn := tls.Client(conn, tlsConfig)
 	err = tlsConn.HandshakeContext(ctx)
-	if err != nil {
-		logger.Printf("%s: TLS handshake %s failed after TCP success: %v", domain, ip, err)
-	}
 	if isRemoteTLSAlert(err, "tls: insufficient security level") && ctx.Err() == nil {
 		// A fatal alert ends the first TLS connection. Reconnect through the
 		// same route, retaining this candidate's original timeout budget.
 		_ = conn.Close()
-		logger.Printf("%s: TLS %s rejected the handshake with insufficient_security; retrying once with ALPN h2,http/1.1", domain, ip)
 		retryConn, retryErr := dialReachability(ctx, domain, ip, cfg)
 		if retryErr != nil {
 			err = retryErr
-			logger.Printf("%s: TLS ALPN retry TCP connection to %s failed (route=%s): %v", domain, ip, cfg.TLSRoute, err)
+			logTCPProbeFailure(domain, ip, port, cfg, "TLS ALPN retry TCP", err)
 		} else {
 			defer retryConn.Close()
 			retryConfig := tlsConfig.Clone()
 			retryConfig.NextProtos = []string{"h2", "http/1.1"}
 			err = tls.Client(retryConn, retryConfig).HandshakeContext(ctx)
 			if err != nil {
-				logger.Printf("%s: TLS ALPN retry handshake %s failed: %v", domain, ip, err)
+				logger.Printf("%s: TLS %s failed after ALPN retry: %v", domain, ip, err)
 			} else {
-				logger.Printf("%s: TLS ALPN retry succeeded for %s", domain, ip)
+				logger.Printf("%s: TLS %s passed after ALPN retry", domain, ip)
 			}
 		}
+	} else if err != nil {
+		logger.Printf("%s: TLS handshake %s failed after TCP success: %v", domain, ip, err)
 	}
 	return tlsProbeResult{
 		tcpReachable:  true,
 		tlsReady:      err == nil,
 		internalError: isRemoteTLSInternalError(err),
+	}
+}
+
+func logTCPProbeFailure(domain, ip string, port int, cfg Config, probe string, err error) {
+	// Strip socket address and syscall wrappers, retaining contextual errors
+	// such as SO_MARK failures and SOCKS5 handshake diagnostics.
+	for {
+		switch wrapped := err.(type) {
+		case *net.OpError:
+			err = wrapped.Err
+		case *os.SyscallError:
+			err = wrapped.Err
+		default:
+			route := cfg.TLSRoute
+			if route == "proxy" {
+				route += " via " + cfg.TLSSOCKS5Addr
+			}
+			logger.Printf("%s: %s %s failed (route=%s): %v", domain, probe, net.JoinHostPort(ip, strconv.Itoa(port)), route, err)
+			return
+		}
 	}
 }
 

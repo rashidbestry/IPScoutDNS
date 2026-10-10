@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -45,13 +46,20 @@ func TestDomainStatusChangesImmediately(t *testing.T) {
 }
 
 func TestPingSingleAttempt(t *testing.T) {
+	previous := logger.Writer()
+	t.Cleanup(func() { logger.SetOutput(previous) })
+	var logs selectionLogBuffer
+	logger.SetOutput(&logs)
 	calls := 0
 	got := pingIPWithRunner(context.Background(), "192.0.2.1", func(context.Context, string) ([]byte, error) {
 		calls++
-		return []byte("Request timed out."), errors.New("exit status 1")
+		return []byte("PING 192.0.2.1: 56 data bytes\n\n--- 192.0.2.1 ping statistics ---\n1 packets transmitted, 0 packets received, 100% packet loss\n"), errors.New("exit status 1")
 	})
 	if got || calls != 1 {
 		t.Fatalf("reachable = %v, calls = %d; want false, 1", got, calls)
+	}
+	if !strings.Contains(logs.String(), "ICMP probe failed: no reply") || strings.Count(logs.String(), "\n") != 1 {
+		t.Fatalf("expected one compact ping failure: %s", logs.String())
 	}
 	calls = 0
 	got = pingIPWithRunner(context.Background(), "192.0.2.1", func(context.Context, string) ([]byte, error) {

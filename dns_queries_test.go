@@ -257,7 +257,11 @@ func TestResolverResponseDiagnostics(t *testing.T) {
 			if got := resolverIPv4Response("empty.example", "resolver", resp); len(got) != 0 {
 				t.Fatalf("IPs = %v", got)
 			}
-			if !strings.Contains(logs.String(), "DNS "+dns.RcodeToString[rcode]+" with 0 A records") {
+			want := "returned DNS " + dns.RcodeToString[rcode]
+			if rcode == dns.RcodeSuccess {
+				want = "returned no IPv4 addresses"
+			}
+			if !strings.Contains(logs.String(), want) {
 				t.Fatalf("missing DNS response diagnostic: %s", logs.String())
 			}
 		})
@@ -302,9 +306,9 @@ func TestDoHResponseDiagnostics(t *testing.T) {
 	}{
 		{"rate limited", 429, "", "HTTP 429 Too Many Requests", ""},
 		{"forbidden", 403, "", "HTTP 403 Forbidden", ""},
-		{"HTTP 200 without A records", 200, string(emptyDNS), "DNS NOERROR with 0 A records", ""},
+		{"HTTP 200 without A records", 200, string(emptyDNS), "returned no IPv4 addresses", ""},
 		{"HTTP 200 with invalid DNS body", 200, "invalid", "invalid DNS response", ""},
-		{"HTTP 200 with usable A record", 200, string(validDNS), "DNS NOERROR with 1 A records", "192.0.2.1"},
+		{"HTTP 200 with usable A record", 200, string(validDNS), "", "192.0.2.1"},
 	} {
 		t.Run(step.name, func(t *testing.T) {
 			var logs selectionLogBuffer
@@ -316,7 +320,10 @@ func TestDoHResponseDiagnostics(t *testing.T) {
 			if (step.wantIP == "" && len(got) != 0) || (step.wantIP != "" && (len(got) != 1 || got[0] != step.wantIP)) {
 				t.Fatalf("IPs = %v, want %q", got, step.wantIP)
 			}
-			if !strings.Contains(logs.String(), step.want) {
+			if step.want == "" && logs.String() != "" {
+				t.Fatalf("successful resolver response should be quiet: %s", logs.String())
+			}
+			if step.want != "" && !strings.Contains(logs.String(), step.want) {
 				t.Fatalf("logs = %s, want %s", logs.String(), step.want)
 			}
 		})

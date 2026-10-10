@@ -83,6 +83,14 @@ Manual binary launches on firmware without system roots must set
 refresh the bundled roots. After an upgrade, restart the service explicitly
 to run the new binary.
 
+IPScoutDNS reads the router's `/etc/TZ` at startup, including fixed offsets and
+daylight-saving rules, without installing `zoneinfo` or changing the service
+environment. An explicit `TZ` override takes precedence. Restart after changing
+the router timezone. `passive_resolve_time=00:00` schedules daily router-midnight
+passes; `passive_resolve_interval` is ignored while a clock time is configured.
+Daily waits recheck the OS clock every 30 seconds to follow NTP corrections,
+without replaying missed dates or repeating a date after a backward correction.
+
 The package installs `files/ipscoutdns.init` as `/etc/init.d/ipscoutdns`.
 It runs `/usr/bin/ipscoutdns --config /etc/ipscoutdns.conf`. Firmware with
 procd restarts after crashes and sends stdout/stderr to the system log.

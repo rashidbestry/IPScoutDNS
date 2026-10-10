@@ -48,6 +48,17 @@ Edit [config/ipscoutdns.conf](config/ipscoutdns.conf) before starting. On OpenWr
 - `mode=active`: DNS server that processes A queries on demand, applies regex filters from [active-domains.txt](config/active-domains.txt), and writes host outputs.
 - `mode=passive`: scheduled resolution of hostnames in [passive-domains.txt](config/passive-domains.txt).
 
+Set `passive_resolve_time=HH:MM` for daily passes in the OS timezone. On Linux,
+IPScoutDNS also reads OpenWrt's `/etc/TZ`, including POSIX daylight-saving rules,
+without requiring a timezone package or init-script changes. An explicit `TZ`
+environment setting takes precedence. Startup logs show the detected timezone;
+restart after changing timezone settings. Scheduled waits check the OS clock at
+least every 30 seconds: a forward correction past the deadline starts one pass,
+a backward correction postpones it, and an attempted local date is not repeated.
+Missed dates are not replayed. When a daily time is set, `passive_resolve_interval`
+is ignored. Leave the time blank to run immediately and then wait the configured
+interval after each completed pass.
+
 Domain-file paths resolve beside the config. The sample uses port 53; choose a free listener port.
 
 On Linux/OpenWrt, `direct_tcp_mark` sets a socket mark for direct TCP/TLS/HTTP probes; `0` disables marking. Set `direct_tcp_mark=255` (or `0xff`) when your firewall already exempts that mark, such as the Passwall2 bypass rule. It requires root or a suitable network capability and preserves `direct_tcp_interface` source binding. A marking failure fails the probe. DNS, ICMP, and SOCKS5 connections are not marked by this setting; nonzero marks are rejected on other operating systems.

@@ -88,7 +88,7 @@ func resolvePassiveDomainWithProbes(ctx context.Context, domain string, cfg Conf
 }
 
 func runPassive(ctx context.Context, cfg Config) error {
-	return runPassiveWithLogs(ctx, cfg, loadPassiveDomainsFile, resolvePassiveDomain, waitPassiveInterval, func() error {
+	return runPassiveWithClock(ctx, cfg, loadPassiveDomainsFile, resolvePassiveDomain, waitPassiveInterval, func() error {
 		if cfg.outputDirectoryShared {
 			return clearPassiveOutputFiles(cfg.outputFiles())
 		}
@@ -96,6 +96,8 @@ func runPassive(ctx context.Context, cfg Config) error {
 	}, func(ctx context.Context) error { return copyRuntimeOutputs(ctx, cfg, outputDestinationDirectory) },
 		func(ctx context.Context) error {
 			return copyRuntimeLog(ctx, cfg, logDestinationDirectory)
+		}, time.Now, func(ctx context.Context, deadline time.Time) bool {
+			return waitPassiveDeadline(ctx, deadline, time.Now, waitPassiveInterval)
 		})
 }
 
@@ -114,15 +116,27 @@ func runPassiveWithOutputs(ctx context.Context, cfg Config, load func(string) ([
 }
 
 func runPassiveWithLogs(ctx context.Context, cfg Config, load func(string) ([]string, error), resolve passiveResolveFunc, wait func(context.Context, time.Duration) bool, cleanup func() error, copyOutputs func(context.Context) error, copyLog func(context.Context) error) error {
+	return runPassiveWithClock(ctx, cfg, load, resolve, wait, cleanup, copyOutputs, copyLog, time.Now, nil)
+}
+
+func runPassiveWithClock(ctx context.Context, cfg Config, load func(string) ([]string, error), resolve passiveResolveFunc, wait func(context.Context, time.Duration) bool, cleanup func() error, copyOutputs func(context.Context) error, copyLog func(context.Context) error, now func() time.Time, waitUntil func(context.Context, time.Time) bool) error {
+	if waitUntil == nil {
+		waitUntil = func(ctx context.Context, deadline time.Time) bool { return wait(ctx, deadline.Sub(now())) }
+	}
 	firstPass := true
+	var lastScheduledDay time.Time
 	if cfg.PassiveResolveTime != "" {
-		next := nextPassiveResolveTime(time.Now(), cfg.PassiveResolveTime)
+		next := nextPassiveResolveTime(now(), cfg.PassiveResolveTime)
 		logger.Printf("next passive pass at %s", next.Format(time.RFC3339))
-		if !wait(ctx, time.Until(next)) {
+		if !waitUntil(ctx, next) {
 			return nil
 		}
 	}
 	for ctx.Err() == nil {
+		if cfg.PassiveResolveTime != "" {
+			start := now()
+			lastScheduledDay = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+		}
 		completedPass := false
 		domains, err := load(cfg.PassiveDomainsFile)
 		if err != nil {
@@ -152,17 +166,28 @@ func runPassiveWithLogs(ctx context.Context, cfg Config, load func(string) ([]st
 		}
 		firstPass = false
 		delay := cfg.PassiveResolveInterval
+		var next time.Time
 		if cfg.PassiveResolveTime != "" {
-			next := nextPassiveResolveTime(time.Now(), cfg.PassiveResolveTime)
+			next = nextPassiveResolveTime(now(), cfg.PassiveResolveTime)
+			// Never repeat an attempted calendar day after a backwards correction,
+			// or after a forward jump made an older deadline due before today's time.
+			minimum := lastScheduledDay.AddDate(0, 0, 1)
+			if next.Before(minimum) {
+				t, _ := time.Parse("15:04", cfg.PassiveResolveTime)
+				next = time.Date(minimum.Year(), minimum.Month(), minimum.Day(), t.Hour(), t.Minute(), 0, 0, minimum.Location())
+			}
 			logger.Printf("next passive pass at %s", next.Format(time.RFC3339))
-			delay = time.Until(next)
 		}
 		if completedPass {
 			if err := copyLog(ctx); err != nil && ctx.Err() == nil {
 				logger.Printf("failed to copy passive log: %v", err)
 			}
 		}
-		if !wait(ctx, delay) {
+		if cfg.PassiveResolveTime != "" {
+			if !waitUntil(ctx, next) {
+				break
+			}
+		} else if !wait(ctx, delay) {
 			break
 		}
 	}
@@ -288,4 +313,34 @@ func waitPassiveInterval(ctx context.Context, interval time.Duration) bool {
 	case <-timer.C:
 		return ctx.Err() == nil
 	}
+}
+
+// Calendar deadlines must follow wall time, including NTP corrections. Interval
+// mode deliberately retains elapsed-time waits. Strip monotonic readings when
+// comparing the deadline, and cap waits so a forward correction is noticed.
+func waitPassiveDeadline(ctx context.Context, deadline time.Time, now func() time.Time, wait func(context.Context, time.Duration) bool) bool {
+	const recheck = 30 * time.Second
+	deadline = deadline.Round(0)
+	for ctx.Err() == nil {
+		before := now()
+		remaining := deadline.Sub(before.Round(0))
+		if remaining <= 0 {
+			return ctx.Err() == nil
+		}
+		pause := remaining
+		if pause > recheck {
+			pause = recheck
+		}
+		if !wait(ctx, pause) {
+			return false
+		}
+		after := now()
+		wallElapsed := after.Round(0).Sub(before.Round(0))
+		// time.Now carries a monotonic reading: scheduler delays affect both
+		// elapsed values, while OS clock corrections affect only wall time.
+		if adjustment := wallElapsed - after.Sub(before); adjustment > 2*time.Second || adjustment < -2*time.Second {
+			logger.Printf("OS clock changed while waiting; current time %s, rechecking passive deadline %s", after.Format(time.RFC3339), deadline.Format(time.RFC3339))
+		}
+	}
+	return false
 }

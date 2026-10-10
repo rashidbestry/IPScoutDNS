@@ -80,6 +80,7 @@ func main() {
 	cfgPath := resolveConfigPath()
 	flag.StringVar(&cfgPath, "config", cfgPath, "path to config file")
 	flag.Parse()
+	timezoneSource, timezoneErr := configureLocalTimezone()
 
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
@@ -109,6 +110,11 @@ func main() {
 
 	icmpEnabled := cfg.ICMPProbe && cfg.TLSRoute != "proxy"
 	logger.Printf("starting IPScoutDNS")
+	if timezoneErr != nil {
+		logger.Printf("failed to load timezone from %s: %v; retaining OS default", timezoneSource, timezoneErr)
+	}
+	zone, offset := time.Now().Zone()
+	logger.Printf("local timezone: %s (%s, UTC offset %ds), source=%s", time.Local, zone, offset, timezoneSource)
 	logger.Printf("- config")
 	logger.Printf("\t- mode: %s", cfg.Mode)
 	if cfg.Mode == "active" {

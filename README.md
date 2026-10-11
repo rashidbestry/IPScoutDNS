@@ -17,6 +17,8 @@ Useful when DNS answers contain unreachable addresses or are filtered by an ISP,
 - [Plain DNS and HTTPS DoH discovery](https://github.com/rashidbestry/IPScoutDNS/wiki/DNS-and-routing), direct/interface-bound connections and SOCKS5 routing. ICMP runs only on direct routes.
 - [Hosts/domain/IP outputs and rotating logs](https://github.com/rashidbestry/IPScoutDNS/wiki/Outputs-and-logging), plus startup and post-scan command hooks.
 
+Probe candidates must be public IPv4 destinations. Private, loopback, link-local, shared, and other non-public special-use ranges are discarded in both modes, including when probing through SOCKS5. Private-network scanning is not supported.
+
 ## Minimum requirements
 
 - **Windows:** Windows 10+ or Windows Server 2016+.

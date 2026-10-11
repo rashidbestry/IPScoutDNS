@@ -83,9 +83,9 @@ func TestCachedResolutionDoesNotReadStatusFiles(t *testing.T) {
 		UnreachableIPsFile:     filepath.Join(dir, "unreachable.ips"),
 	}
 	const domain = "status-cache.example"
-	updateCache(domain, "192.0.2.1", "TLS")
+	updateCache(domain, "8.8.8.1", "TLS")
 	t.Cleanup(func() { deleteCache(domain) })
-	recordReachableHost(domain, "192.0.2.1")
+	recordReachableHost(domain, "8.8.8.1")
 	// Replace indexed files with directories: any attempted read/write fails.
 	// Outputs are process-owned; this is an I/O tripwire, not a supported edit.
 	for _, path := range currentConfig.outputFiles() {
@@ -102,7 +102,7 @@ func TestCachedResolutionDoesNotReadStatusFiles(t *testing.T) {
 	t.Cleanup(func() { logger.SetOutput(previousLog) })
 	for i := 0; i < 3; i++ {
 		ip, ok, cached := resolveAndSelectWithProbes(context.Background(), domain, currentConfig, nil, nil, nil, nil)
-		if ip != "192.0.2.1" || !ok || !cached {
+		if ip != "8.8.8.1" || !ok || !cached {
 			t.Fatalf("cached resolution = %q, %t, %t", ip, ok, cached)
 		}
 	}

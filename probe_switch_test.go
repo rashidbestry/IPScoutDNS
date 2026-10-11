@@ -44,7 +44,7 @@ func TestProbeSwitchCombinations(t *testing.T) {
 		t.Run(fmt.Sprint(mask), func(t *testing.T) {
 			cfg := Config{DirectDNS: []string{"test"}, MaxParallelTests: 1, TLSRoute: "direct", TCPProbe: mask&1 != 0, TLSProbe: mask&2 != 0, HTTPProbe: mask&4 != 0, ICMPProbe: mask&8 != 0}
 			tlsCalls, httpCalls, pingCalls := 0, 0, 0
-			query := func(context.Context, string, string, bool, Config) []string { return []string{"192.0.2.1"} }
+			query := func(context.Context, string, string, bool, Config) []string { return []string{"8.8.8.1"} }
 			tlsCheck := func(context.Context, string, string, Config) tlsProbeResult {
 				tlsCalls++
 				return tlsProbeResult{tcpReachable: true, tlsReady: true}

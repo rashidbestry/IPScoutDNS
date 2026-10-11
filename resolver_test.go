@@ -38,7 +38,7 @@ func TestTLSProbeWritesRuntimeOutputs(t *testing.T) {
 	if err := os.WriteFile(cfg.UnreachableDomainsFile, []byte(domain+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	query := func(context.Context, string, string, bool, Config) []string { return []string{"192.0.2.1"} }
+	query := func(context.Context, string, string, bool, Config) []string { return []string{"8.8.8.1"} }
 	// Use a local TLS endpoint to exercise real TCP and TLS without external network access.
 	probe := func(ctx context.Context, domain, candidate string, cfg Config) tlsProbeResult {
 		return testTLS(ctx, domain, ip, cfg)
@@ -48,7 +48,7 @@ func TestTLSProbeWritesRuntimeOutputs(t *testing.T) {
 		return false
 	})
 	for path, want := range map[string]string{
-		cfg.ReachableHostsFile:     "192.0.2.1 " + domain + "\n",
+		cfg.ReachableHostsFile:     "8.8.8.1 " + domain + "\n",
 		cfg.ReachableDomainsFile:   domain + "\n",
 		cfg.UnreachableDomainsFile: "",
 	} {
@@ -82,7 +82,7 @@ func TestDomainOutputReachability(t *testing.T) {
 			}
 			currentConfig = cfg
 			query := func(context.Context, string, string, bool, Config) []string {
-				return []string{"192.0.2.1"}
+				return []string{"8.8.8.1"}
 			}
 			const domain = "example.com"
 			hostRecorded := false
@@ -134,7 +134,7 @@ func TestDomainOutputReachability(t *testing.T) {
 					}
 					wantHosts := ""
 					if hostRecorded {
-						wantHosts = "192.0.2.1 " + domain + "\n"
+						wantHosts = "8.8.8.1 " + domain + "\n"
 					}
 					if string(hosts) != wantHosts {
 						t.Fatalf("hosts = %q, want %q", hosts, wantHosts)
@@ -172,7 +172,7 @@ func TestDomainReachabilityRetriesTransientTCPFailure(t *testing.T) {
 		UnreachableDomainsFile: filepath.Join(dir, "unreachable.domains"),
 	}
 	currentConfig = cfg
-	query := func(context.Context, string, string, bool, Config) []string { return []string{"192.0.2.1"} }
+	query := func(context.Context, string, string, bool, Config) []string { return []string{"8.8.8.1"} }
 	calls := 0
 	probe := func(context.Context, string, string, Config) tlsProbeResult {
 		calls++
@@ -185,14 +185,14 @@ func TestDomainReachabilityRetriesTransientTCPFailure(t *testing.T) {
 		t.Error("ICMP should not be needed after retry succeeds")
 		return false
 	})
-	if !ok || selected != "192.0.2.1" || calls != 2 {
+	if !ok || selected != "8.8.8.1" || calls != 2 {
 		t.Fatalf("selected = %q, ok = %v, probes = %d", selected, ok, calls)
 	}
 	if _, err := os.Stat(cfg.UnreachableDomainsFile); !os.IsNotExist(err) {
 		t.Fatalf("unexpected unreachable output: %v", err)
 	}
 	contents, err := os.ReadFile(cfg.ReachableHostsFile)
-	if err != nil || string(contents) != "192.0.2.1 example.com\n" {
+	if err != nil || string(contents) != "8.8.8.1 example.com\n" {
 		t.Fatalf("hosts = %q, error = %v", contents, err)
 	}
 }
@@ -272,7 +272,7 @@ func TestInconclusiveChecksDoNotChangeDomainStatus(t *testing.T) {
 	if _, err := os.Stat(cfg.UnreachableDomainsFile); !os.IsNotExist(err) {
 		t.Fatalf("DNS failure changed status: %v", err)
 	}
-	query = func(context.Context, string, string, bool, Config) []string { return []string{"192.0.2.1"} }
+	query = func(context.Context, string, string, bool, Config) []string { return []string{"8.8.8.1"} }
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	resolveAndSelectWithProbes(ctx, domain, cfg, query, tlsProbe, func(context.Context, string, string, Config) httpProbeResult {
@@ -305,7 +305,7 @@ func TestICMPRespectsTCPRoute(t *testing.T) {
 				}
 				currentConfig = cfg
 				const domain = "icmp-route.example"
-				const ip = "192.0.2.1"
+				const ip = "8.8.8.1"
 				deleteCache(domain)
 				t.Cleanup(func() { deleteCache(domain) })
 				query := func(context.Context, string, string, bool, Config) []string { return []string{ip} }
@@ -364,7 +364,7 @@ func TestHTTPProbeToggle(t *testing.T) {
 					ReachableHostsFile:     filepath.Join(dir, "reachable.hosts"),
 				}
 				currentConfig = cfg
-				query := func(context.Context, string, string, bool, Config) []string { return []string{"192.0.2.1"} }
+				query := func(context.Context, string, string, bool, Config) []string { return []string{"8.8.8.1"} }
 				tlsCheck := func(context.Context, string, string, Config) tlsProbeResult {
 					return tlsProbeResult{tcpReachable: true}
 				}
@@ -378,7 +378,7 @@ func TestHTTPProbeToggle(t *testing.T) {
 					resolvePassiveDomainWithProbes(context.Background(), "example.com", cfg, query, tlsCheck, httpCheck, pingCheck)
 				} else {
 					ip, ok, _ := resolveAndSelectWithProbes(context.Background(), "example.com", cfg, query, tlsCheck, httpCheck, pingCheck)
-					if ok != enabled || (ok && ip != "192.0.2.1") {
+					if ok != enabled || (ok && ip != "8.8.8.1") {
 						t.Errorf("selected = %q, ok = %v, HTTP enabled = %v", ip, ok, enabled)
 					}
 				}
@@ -408,7 +408,7 @@ func TestHTTPProbeToggle(t *testing.T) {
 				}
 				wantHosts := ""
 				if enabled {
-					wantHosts = "192.0.2.1 example.com\n"
+					wantHosts = "8.8.8.1 example.com\n"
 				}
 				if string(hosts) != wantHosts {
 					t.Fatalf("hosts = %q, want %q", hosts, wantHosts)

@@ -123,7 +123,7 @@ func TestEarlyHTTPFallbackSelection(t *testing.T) {
 				currentConfig = cfg
 				var ips []string
 				for i := 1; i <= 20; i++ {
-					ips = append(ips, fmt.Sprintf("192.0.2.%d", i))
+					ips = append(ips, fmt.Sprintf("8.8.8.%d", i))
 				}
 				query := func(context.Context, string, string, bool, Config) []string { return ips }
 				var tlsCalls, httpCalls atomic.Int32
@@ -196,7 +196,7 @@ func TestEarlyHTTPFallbackResumeAndGating(t *testing.T) {
 			cfg := Config{DirectDNS: []string{"test"}, TLSProbe: true, HTTPProbe: tc.httpEnabled,
 				HTTPFallbackTLSAlerts: tc.threshold, MaxParallelTests: 1, HostsMaxIPsPerDomain: 1}
 			currentConfig = cfg
-			ips := []string{"192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4", "192.0.2.5"}
+			ips := []string{"8.8.8.1", "8.8.8.2", "8.8.8.3", "8.8.8.4", "8.8.8.5"}
 			query := func(context.Context, string, string, bool, Config) []string { return ips }
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()

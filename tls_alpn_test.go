@@ -76,7 +76,7 @@ func startALPNProbeServer(t *testing.T, proxy bool, firstAlert, retryAlert byte,
 						t.Error(err)
 						return
 					}
-					if !reflect.DeepEqual(connect, []byte{5, 1, 0, 1, 192, 0, 2, 1, 32, 251}) { // port 8443
+					if !reflect.DeepEqual(connect, []byte{5, 1, 0, 1, 8, 8, 8, 1, 32, 251}) { // port 8443
 						t.Errorf("SOCKS target changed on attempt %d: %v", attempt, connect)
 						return
 					}
@@ -142,7 +142,7 @@ func TestTLSALPNRetrySelection(t *testing.T) {
 				var logs selectionLogBuffer
 				logger.SetOutput(&logs)
 				const domain = "relays.net.anydesk.com"
-				query := func(context.Context, string, string, bool, Config) []string { return []string{"192.0.2.1"} }
+				query := func(context.Context, string, string, bool, Config) []string { return []string{"8.8.8.1"} }
 				probe := func(ctx context.Context, domain, ip string, cfg Config) tlsProbeResult {
 					if !proxy {
 						ip = "127.0.0.1"
@@ -158,7 +158,7 @@ func TestTLSALPNRetrySelection(t *testing.T) {
 					resolvePassiveDomainWithProbes(context.Background(), domain, cfg, query, probe, httpCheck, ping)
 				} else {
 					ip, ok, _ := resolveAndSelectWithProbes(context.Background(), domain, cfg, query, probe, httpCheck, ping)
-					if !ok || ip != "192.0.2.1" {
+					if !ok || ip != "8.8.8.1" {
 						t.Fatalf("selected %q success=%v", ip, ok)
 					}
 				}
@@ -169,7 +169,7 @@ func TestTLSALPNRetrySelection(t *testing.T) {
 				if first.name != domain || second.name != domain || len(first.protocols) != 0 || !reflect.DeepEqual(second.protocols, []string{"h2", "http/1.1"}) {
 					t.Fatalf("ClientHello first=%+v second=%+v", first, second)
 				}
-				if strings.Count(logs.String(), "\n") != 1 || !strings.Contains(logs.String(), "collected[1] reached[1] WORKING IP = 192.0.2.1 [TLS]") {
+				if strings.Count(logs.String(), "\n") != 1 || !strings.Contains(logs.String(), "collected[1] reached[1] WORKING IP = 8.8.8.1 [TLS]") {
 					t.Fatalf("logs=%s", logs.String())
 				}
 				if strings.Contains(logs.String(), "failed after TCP success") || strings.Contains(logs.String(), "testing ") {

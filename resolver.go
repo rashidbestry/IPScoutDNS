@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -156,6 +157,24 @@ func dnsServiceContext(cfg Config) context.Context {
 	return context.Background()
 }
 
+// Non-public destinations that IsGlobalUnicast does not reject. DNS answers
+// must not grant access to private/shared networks or special-use addresses.
+// https://www.iana.org/assignments/iana-ipv4-special-registry/
+var prohibitedProbeNetworks = [...]netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+}
+
 func normalizeIPv4Candidate(value string) (string, bool) {
 	parsed := net.ParseIP(strings.TrimSpace(value))
 	if parsed == nil {
@@ -164,6 +183,16 @@ func normalizeIPv4Candidate(value string) (string, bool) {
 	ipv4 := parsed.To4()
 	if ipv4 == nil || !ipv4.IsGlobalUnicast() {
 		return "", false
+	}
+	addr := netip.AddrFrom4([4]byte(ipv4))
+	// These two anycast addresses are globally reachable exceptions to
+	// the otherwise non-public 192.0.0.0/24 protocol-assignment range.
+	if addr != netip.MustParseAddr("192.0.0.9") && addr != netip.MustParseAddr("192.0.0.10") {
+		for _, network := range prohibitedProbeNetworks {
+			if network.Contains(addr) {
+				return "", false
+			}
+		}
 	}
 	return ipv4.String(), true
 }

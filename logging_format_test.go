@@ -23,7 +23,7 @@ func TestCompactDomainResults(t *testing.T) {
 				currentConfig = cfg
 				var candidates []string
 				for i := 1; i <= 12; i++ {
-					candidates = append(candidates, fmt.Sprintf("192.0.2.%d", i))
+					candidates = append(candidates, fmt.Sprintf("8.8.8.%d", i))
 				}
 				query := func(ctx context.Context, domain, server string, proxy bool, cfg Config) []string {
 					// Identical lists from both resolvers must count only once.
@@ -48,7 +48,7 @@ func TestCompactDomainResults(t *testing.T) {
 				} else {
 					resolveAndSelectWithProbes(context.Background(), "compact.example", cfg, query, tlsCheck, httpCheck, ping)
 				}
-				want := "- compact.example: collected[12] reached[8] WORKING IP = 192.0.2.1 [" + outcome + "]"
+				want := "- compact.example: collected[12] reached[8] WORKING IP = 8.8.8.1 [" + outcome + "]"
 				if outcome == "TCP failure" {
 					want = "- compact.example: collected[12] reached[0] TCP[X] TLS[] HTTP[] ICMP[X] NO WORKING IP"
 				}
@@ -72,14 +72,14 @@ func TestCompactCacheHitDoesNotRepeatWorkingIP(t *testing.T) {
 	cfg := Config{Mode: "active", TCPProbe: true, TLSProbe: true, CacheTTL: time.Hour, DirectDNS: []string{"one"}, MaxParallelTests: 1}
 	currentConfig = cfg
 	queries, checks := 0, 0
-	query := func(context.Context, string, string, bool, Config) []string { queries++; return []string{"192.0.2.1"} }
+	query := func(context.Context, string, string, bool, Config) []string { queries++; return []string{"8.8.8.1"} }
 	probe := func(context.Context, string, string, Config) tlsProbeResult {
 		checks++
 		return tlsProbeResult{tcpReachable: true, tlsReady: true}
 	}
 	for i := 0; i < 2; i++ {
 		ip, ok, cached := resolveAndSelectWithProbes(context.Background(), "compact.cache.example", cfg, query, probe, nil, nil)
-		if ip != "192.0.2.1" || !ok || cached != (i == 1) {
+		if ip != "8.8.8.1" || !ok || cached != (i == 1) {
 			t.Fatalf("ip=%s ok=%t cached=%t", ip, ok, cached)
 		}
 	}

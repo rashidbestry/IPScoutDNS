@@ -103,7 +103,7 @@ func appendUniqueLineLocked(path string, value string, seen map[string]bool) {
 }
 
 func recordHost(path string, domain string, ip string) {
-	if path == "" {
+	if path == "" || !isLiteralDomain(domain) {
 		return
 	}
 
@@ -133,7 +133,7 @@ func recordReachableHost(domain string, ip string) {
 // The mutex also protects concurrent Active requests and Passive domain jobs.
 func updateReachableHosts(domain string, ips []string, limit int, keepExisting bool) {
 	path := currentConfig.ReachableHostsFile
-	if path == "" {
+	if path == "" || !isLiteralDomain(domain) {
 		return
 	}
 	hostsMu.Lock()

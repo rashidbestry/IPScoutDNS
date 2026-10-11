@@ -90,8 +90,19 @@ func resolveAndSelect(domain string, cfg Config) (string, bool) {
 
 func resolveAndSelectStatus(domain string, cfg Config) (string, bool, bool) {
 	ctx := compactProbeContext(dnsServiceContext(cfg))
-	return resolveAndSelectWithProbes(ctx, domain, cfg, queryResolver, testTLS, testHTTP, pingProbe(ctx, cfg))
+	return resolveAndSelectWithProbes(ctx, domain, cfg, queryResolver, testTLS, testHTTP, nil)
 }
+
+// Safety ceilings are independent of the successful-IP quota and per-domain
+// worker setting. Failed DNS candidates must consume a bounded amount of work.
+const (
+	maxResolutionCandidates = 32
+	maxResolutionDuration   = 30 * time.Second
+	maxConcurrentProbes     = 32
+)
+
+// Reuse the context-aware gate, separately from upstream DNS query slots.
+var activeProbes dnsQueryLimiter
 
 type resolverQueryFunc func(context.Context, string, string, bool, Config) []string
 type tlsProbeFunc func(context.Context, string, string, Config) tlsProbeResult
@@ -211,8 +222,14 @@ func resolveAndSelectWithContext(ctx context.Context, domain string, cfg Config,
 }
 
 func resolveAndSelectWithProbes(ctx context.Context, domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, httpCheck httpProbeFunc, pingCheck icmpProbeFunc) (string, bool, bool) {
+	ctx, cancel := context.WithTimeout(ctx, maxResolutionDuration)
+	defer cancel()
 	ctx = compactProbeContext(ctx)
 	cfg.runtimeContext = ctx
+	// Bind the production ICMP runner after creating the resolution deadline.
+	if pingCheck == nil {
+		pingCheck = pingProbe(ctx, cfg)
+	}
 	if !cfg.TCPProbe && !cfg.TLSProbe && !cfg.HTTPProbe && !cfg.ICMPProbe {
 		logDomainResult(domain, 0, 0, "", "", cfg, nil, nil, nil, "probes disabled; previous status kept")
 		return "", false, false
@@ -521,6 +538,10 @@ func collectResolverIPsWithContext(parent context.Context, domain string, cfg Co
 			}
 			seen[ip] = true
 			ips = append(ips, ip)
+			if len(ips) == maxResolutionCandidates {
+				// The deferred cancellation also releases pending DNS queries.
+				return ips
+			}
 		}
 	}
 	return ips
@@ -645,10 +666,14 @@ func runIPChecks[T any](ctx context.Context, ips []string, parallel int, check f
 		go func() {
 			defer workers.Done()
 			for ip := range jobs {
-				if ctx.Err() != nil {
+				if err := activeProbes.acquire(ctx, maxConcurrentProbes); err != nil {
 					return
 				}
-				completed <- result{ip: ip, value: check(ip)}
+				value := func() T {
+					defer activeProbes.release()
+					return check(ip)
+				}()
+				completed <- result{ip: ip, value: value}
 			}
 		}()
 	}

@@ -69,7 +69,7 @@ type passiveResolveFunc func(context.Context, string, Config)
 
 func resolvePassiveDomain(ctx context.Context, domain string, cfg Config) {
 	ctx = compactProbeContext(ctx)
-	resolvePassiveDomainWith(ctx, domain, cfg, queryResolver, testTLS, pingProbe(ctx, cfg))
+	resolvePassiveDomainWith(ctx, domain, cfg, queryResolver, testTLS, nil)
 }
 
 func resolvePassiveDomainWith(ctx context.Context, domain string, cfg Config, query resolverQueryFunc, tlsCheck tlsProbeFunc, pingCheck icmpProbeFunc) {

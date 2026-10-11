@@ -62,7 +62,7 @@ func TestDomainProbeLimit(t *testing.T) {
 					const domain = "limit.example"
 					var ips []string
 					for i := 1; i <= 20; i++ {
-						ips = append(ips, fmt.Sprintf("192.0.2.%d", i))
+						ips = append(ips, fmt.Sprintf("8.8.8.%d", i))
 					}
 					query := func(context.Context, string, string, bool, Config) []string { return ips }
 					var tlsCalls, httpCalls, icmpCalls atomic.Int32
@@ -107,13 +107,13 @@ func TestDomainProbeLimit(t *testing.T) {
 						t.Fatalf("skipped IPs classified as unreachable: %s", contents)
 					}
 					// A new pass must still probe, and replace this domain's old mappings.
-					ips = []string{"198.51.100.1"}
+					ips = []string{"1.1.1.1"}
 					resolveAndSelectWithProbes(context.Background(), domain, cfg, query, tlsCheck, httpCheck, ping)
 					contents, err = os.ReadFile(cfg.ReachableHostsFile)
 					if err != nil {
 						t.Fatal(err)
 					}
-					if limit > 0 && string(contents) != "198.51.100.1 "+domain+"\n" {
+					if limit > 0 && string(contents) != "1.1.1.1 "+domain+"\n" {
 						t.Fatalf("stale mappings retained: %q", contents)
 					}
 				})

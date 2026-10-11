@@ -85,7 +85,7 @@ func testDNSQueryLimitSharedAcrossModesAndRoutes(t *testing.T, limit int) {
 		started <- domain + "/" + server
 		select {
 		case <-release:
-			return []string{"192.0.2.1"}
+			return []string{"8.8.8.1"}
 		case <-ctx.Done():
 			return nil
 		}
@@ -151,7 +151,7 @@ func TestQueuedDNSQueryGetsFreshTimeout(t *testing.T) {
 		done <- collectResolverIPsWithContext(ctx, "queue.example", cfg, func(queryCtx context.Context, _, _ string, _ bool, _ Config) []string {
 			deadline, _ := queryCtx.Deadline()
 			remaining <- time.Until(deadline)
-			return []string{"192.0.2.1"}
+			return []string{"8.8.8.1"}
 		})
 	}()
 	// Queue for longer than dns_timeout. The network budget must not expire.
@@ -163,7 +163,7 @@ func TestQueuedDNSQueryGetsFreshTimeout(t *testing.T) {
 	release()
 	select {
 	case ips := <-done:
-		if len(ips) != 1 || ips[0] != "192.0.2.1" {
+		if len(ips) != 1 || ips[0] != "8.8.8.1" {
 			t.Fatalf("IPs = %v", ips)
 		}
 	case <-ctx.Done():
@@ -273,9 +273,9 @@ func TestResolverResponseDiagnostics(t *testing.T) {
 	logger.SetOutput(&logs)
 	ips := collectResolverIPs("filtered.example", Config{DirectDNS: []string{"resolver"}},
 		func(context.Context, string, string, bool, Config) []string {
-			return []string{"0.0.0.0", "::1", "not-an-IP", "192.0.2.1"}
+			return []string{"0.0.0.0", "::1", "not-an-IP", "8.8.8.1"}
 		})
-	if len(ips) != 1 || ips[0] != "192.0.2.1" {
+	if len(ips) != 1 || ips[0] != "8.8.8.1" {
 		t.Fatalf("usable candidates = %v", ips)
 	}
 	for _, ip := range []string{"0.0.0.0", "::1", "not-an-IP"} {

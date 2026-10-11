@@ -68,7 +68,7 @@ func TestActiveDNSLiteralHostnames(t *testing.T) {
 			domainRegexes = []*regexp.Regexp{regexp.MustCompile(`.*`)}
 			query := func(context.Context, string, string, bool, Config) []string {
 				queryCalls.Add(1)
-				return []string{"192.0.2.1"}
+				return []string{"8.8.8.1"}
 			}
 			probe := func(context.Context, string, string, Config) tlsProbeResult {
 				return tlsProbeResult{tcpReachable: true, tlsReady: true}
@@ -101,7 +101,7 @@ func TestActiveDNSLiteralHostnames(t *testing.T) {
 					t.Fatalf("unexpected domain output: %v", err)
 				}
 			} else {
-				if fallbackCalls.Load() != 0 || queryCalls.Load() != 1 || !cached || string(hosts) != existing+"192.0.2.1 "+domain+"\n" {
+				if fallbackCalls.Load() != 0 || queryCalls.Load() != 1 || !cached || string(hosts) != existing+"8.8.8.1 "+domain+"\n" {
 					t.Fatalf("valid domain mishandled: fallback=%d queries=%d cached=%v hosts=%q", fallbackCalls.Load(), queryCalls.Load(), cached, hosts)
 				}
 			}

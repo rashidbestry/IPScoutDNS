@@ -68,7 +68,7 @@ func TestProxyProbeSocketIsUnmarked(t *testing.T) {
 	cfg.DirectTCPMark = 255
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	conn, err := dialReachabilityPort(ctx, "example.com", "192.0.2.1", cfg, 8443)
+	conn, err := dialReachabilityPort(ctx, "example.com", "8.8.8.1", cfg, 8443)
 	if err != nil {
 		t.Fatal(err)
 	}

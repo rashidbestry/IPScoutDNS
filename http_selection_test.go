@@ -62,8 +62,8 @@ func TestActiveDNSServiceSelection(t *testing.T) {
 		name, protocol, wantIP           string
 		tlsReady, httpEnabled, httpReady bool
 	}{
-		{"TLS preferred over an earlier candidate", "TLS", "192.0.2.2", true, true, true},
-		{"HTTP selected when TLS fails", "HTTP", "192.0.2.1", false, true, true},
+		{"TLS preferred over an earlier candidate", "TLS", "8.8.8.2", true, true, true},
+		{"HTTP selected when TLS fails", "HTTP", "8.8.8.1", false, true, true},
 		{"HTTP disabled uses DNS fallback", "", "198.51.100.99", false, false, true},
 		{"both service probes fail", "", "198.51.100.99", false, true, false},
 	} {
@@ -90,15 +90,15 @@ func TestActiveDNSServiceSelection(t *testing.T) {
 			domainRegexes = []*regexp.Regexp{regexp.MustCompile(`^http-selection\.example$`)}
 			query := func(context.Context, string, string, bool, Config) []string {
 				queryCalls.Add(1)
-				return []string{"192.0.2.1", "192.0.2.2"}
+				return []string{"8.8.8.1", "8.8.8.2"}
 			}
 			tlsCheck := func(_ context.Context, _, ip string, _ Config) tlsProbeResult {
 				tlsCalls.Add(1)
-				return tlsProbeResult{tcpReachable: true, tlsReady: step.tlsReady && ip == "192.0.2.2"}
+				return tlsProbeResult{tcpReachable: true, tlsReady: step.tlsReady && ip == "8.8.8.2"}
 			}
 			httpCheck := func(_ context.Context, _, ip string, _ Config) httpProbeResult {
 				httpCalls.Add(1)
-				return httpProbeResult{tcpReachable: true, httpReady: step.httpReady && ip == "192.0.2.1"}
+				return httpProbeResult{tcpReachable: true, httpReady: step.httpReady && ip == "8.8.8.1"}
 			}
 			address := startSelectionDNSServer(t, dns.HandlerFunc(func(w dns.ResponseWriter, req *dns.Msg) {
 				handleDNSWith(w, req, func(domain string, cfg Config) (string, bool, bool) {

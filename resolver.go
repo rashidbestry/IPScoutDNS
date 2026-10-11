@@ -39,7 +39,9 @@ func handleDNSWith(w dns.ResponseWriter, req *dns.Msg, resolve func(string, Conf
 	q := req.Question[0]
 	domain := strings.TrimSuffix(strings.ToLower(q.Name), ".")
 
-	if q.Qtype != dns.TypeA {
+	// DNS presentation names may contain escaped spaces and other characters
+	// that cannot be represented as a single literal hostname in hosts output.
+	if q.Qtype != dns.TypeA || !isLiteralDomain(domain) {
 		forwardDNS(w, req, currentConfig.FallbackDNS)
 		return
 	}

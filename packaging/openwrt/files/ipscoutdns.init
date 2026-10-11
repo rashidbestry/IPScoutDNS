@@ -16,7 +16,7 @@ prepare_service() {
 		echo "IPScoutDNS config is not readable: $CONFIG" >&2
 		return 1
 	}
-	mkdir -p /tmp/ipscoutdns || return 1
+	# The binary creates and validates its private runtime directory.
 	# Release packages carry roots for firmware without a certificate package.
 	# Preserve an explicitly configured certificate file.
 	if [ -z "$SSL_CERT_FILE" ] && [ -r /usr/share/ipscoutdns/ca-certificates.crt ]; then

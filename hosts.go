@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -89,7 +90,7 @@ func appendUniqueLineLocked(path string, value string, seen map[string]bool) {
 	if seen[key] {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := openHostsFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		logger.Printf("failed to open hosts file %s: %v", path, err)
 		return
@@ -138,8 +139,14 @@ func updateReachableHosts(domain string, ips []string, limit int, keepExisting b
 	}
 	hostsMu.Lock()
 	defer hostsMu.Unlock()
-	contents, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
+	f, err := openHostsFile(path, os.O_RDWR|os.O_CREATE)
+	if err != nil {
+		logger.Printf("failed to open hosts file %s: %v", path, err)
+		return
+	}
+	defer f.Close()
+	contents, err := io.ReadAll(f)
+	if err != nil {
 		logger.Printf("failed to read hosts file %s: %v", path, err)
 		return
 	}
@@ -174,7 +181,12 @@ func updateReachableHosts(domain string, ips []string, limit int, keepExisting b
 		output += "\n"
 	}
 	if output != string(contents) {
-		if err := os.WriteFile(path, []byte(output), 0644); err != nil {
+		// Keep using the checked inode for the entire read/update operation.
+		_, err := f.WriteAt([]byte(output), 0)
+		if err == nil {
+			err = f.Truncate(int64(len(output)))
+		}
+		if err != nil {
 			logger.Printf("failed to update hosts file %s: %v", path, err)
 			return
 		}

@@ -47,6 +47,11 @@ func prepareRuntimeOutputsWith(cfg *Config, configPath, goos string, packageBuil
 	if err != nil {
 		return err
 	}
+	if goos == "linux" && packageBuild {
+		if err := prepareOpenWrtOutputDirectory(dir); err != nil {
+			return fmt.Errorf("prepare OpenWrt output directory: %w", err)
+		}
+	}
 	if err := configureOutputPaths(cfg, dir, goos == "windows"); err != nil {
 		return err
 	}

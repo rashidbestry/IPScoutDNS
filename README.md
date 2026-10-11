@@ -19,6 +19,8 @@ Useful when DNS answers contain unreachable addresses or are filtered by an ISP,
 
 Probe candidates must be public IPv4 destinations. Private, loopback, link-local, shared, and other non-public special-use ranges are discarded in both modes, including when probing through SOCKS5. Private-network scanning is not supported.
 
+Both modes probe at most the first 32 distinct eligible candidates collected per resolution, regardless of the successful-IP quota. Discovery, probe queueing, retries, and fallback probe phases share a 30-second deadline; at most 32 probes run concurrently across all domains. These safety ceilings also apply when the successful-IP quota is unlimited. Candidates beyond the cap are not checked; an expired resolution preserves the previous domain status and Active mode uses fallback DNS.
+
 ## Minimum requirements
 
 - **Windows:** Windows 10+ or Windows Server 2016+.

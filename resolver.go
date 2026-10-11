@@ -816,7 +816,14 @@ func queryDoHSOCKS5(ctx context.Context, domain, endpoint, socksAddr string) []s
 		timeout = defaultDNSTimeout
 	}
 
-	client := &http.Client{Transport: transport, Timeout: timeout}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			// Only contact the configured HTTPS resolver; reject redirects below.
+			return http.ErrUseLastResponse
+		},
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(wire))
 	if err != nil {
 		logUnlessCanceled(ctx, "%s: SOCKS5 DoH %s request creation failed: %v", domain, endpoint, err)

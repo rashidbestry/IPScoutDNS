@@ -36,7 +36,7 @@ func TestPassiveNextClock(t *testing.T) {
 func TestPassiveCleanupAndRewrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "reachable.ips")
-	appendUniqueLine(path, "1.1.1.1", writtenReachableIPs)
+	recordStatus(path, "", "1.1.1.1")
 	if err := os.Mkdir(filepath.Join(dir, "nested"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestPassiveCleanupAndRewrite(t *testing.T) {
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("cleanup: %v %v", entries, err)
 	}
-	appendUniqueLine(path, "1.1.1.1", writtenReachableIPs)
+	recordStatus(path, "", "1.1.1.1")
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != "1.1.1.1\n" {
 		t.Fatalf("rewrite: %q %v", data, err)

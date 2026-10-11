@@ -11,13 +11,9 @@ import (
 )
 
 var (
-	hostsMu                   sync.Mutex
-	writtenReachable          = make(map[string]bool)
-	writtenReachableDomains   = make(map[string]bool)
-	writtenReachableIPs       = make(map[string]bool)
-	writtenUnreachableDomains = make(map[string]bool)
-	writtenUnreachableIPs     = make(map[string]bool)
-	pingIPFn                  = pingIPContext
+	hostsMu          sync.Mutex
+	writtenReachable = make(map[string]bool)
+	pingIPFn         = pingIPContext
 )
 
 func pingProbe(parent context.Context, cfg Config) icmpProbeFunc {
@@ -106,44 +102,6 @@ func appendUniqueLineLocked(path string, value string, seen map[string]bool) {
 	seen[key] = true
 }
 
-func removeLineLocked(path string, value string, seen map[string]bool) {
-	if path == "" {
-		return
-	}
-
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			logger.Printf("failed to read domains file %s: %v", path, err)
-		}
-		return
-	}
-
-	lines := strings.Split(strings.TrimSuffix(string(contents), "\n"), "\n")
-	filtered := lines[:0]
-	removed := false
-	for _, line := range lines {
-		if strings.TrimSuffix(line, "\r") == value {
-			removed = true
-			continue
-		}
-		filtered = append(filtered, line)
-	}
-	if !removed {
-		return
-	}
-
-	updated := strings.Join(filtered, "\n")
-	if updated != "" {
-		updated += "\n"
-	}
-	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
-		logger.Printf("failed to update domains file %s: %v", path, err)
-		return
-	}
-	delete(seen, path+"\x00"+value)
-}
-
 func recordHost(path string, domain string, ip string) {
 	if path == "" {
 		return
@@ -153,27 +111,15 @@ func recordHost(path string, domain string, ip string) {
 }
 
 func recordReachableIP(ip string) {
-	hostsMu.Lock()
-	defer hostsMu.Unlock()
-	removeLineLocked(currentConfig.UnreachableIPsFile, ip, writtenUnreachableIPs)
-	appendUniqueLineLocked(currentConfig.ReachableIPsFile, ip, writtenReachableIPs)
+	recordStatus(currentConfig.ReachableIPsFile, currentConfig.UnreachableIPsFile, ip)
 }
 
 func recordUnreachableIP(ip string) {
-	hostsMu.Lock()
-	defer hostsMu.Unlock()
-	removeLineLocked(currentConfig.ReachableIPsFile, ip, writtenReachableIPs)
-	appendUniqueLineLocked(currentConfig.UnreachableIPsFile, ip, writtenUnreachableIPs)
+	recordStatus(currentConfig.UnreachableIPsFile, currentConfig.ReachableIPsFile, ip)
 }
 
 func recordReachableDomain(domain string) {
-	if domain == "" {
-		return
-	}
-	hostsMu.Lock()
-	defer hostsMu.Unlock()
-	removeLineLocked(currentConfig.UnreachableDomainsFile, domain, writtenUnreachableDomains)
-	appendUniqueLineLocked(currentConfig.ReachableDomainsFile, domain, writtenReachableDomains)
+	recordStatus(currentConfig.ReachableDomainsFile, currentConfig.UnreachableDomainsFile, domain)
 }
 
 func recordReachableHost(domain string, ip string) {
@@ -244,11 +190,5 @@ func updateReachableHosts(domain string, ips []string, limit int, keepExisting b
 }
 
 func recordDomainUnreachable(domain string) {
-	if domain == "" {
-		return
-	}
-	hostsMu.Lock()
-	defer hostsMu.Unlock()
-	removeLineLocked(currentConfig.ReachableDomainsFile, domain, writtenReachableDomains)
-	appendUniqueLineLocked(currentConfig.UnreachableDomainsFile, domain, writtenUnreachableDomains)
+	recordStatus(currentConfig.UnreachableDomainsFile, currentConfig.ReachableDomainsFile, domain)
 }

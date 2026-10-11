@@ -243,6 +243,7 @@ func clearPassiveOutputFiles(paths []string) error {
 	hostsMu.Lock()
 	defer hostsMu.Unlock()
 	for _, path := range paths {
+		delete(statusFiles, path)
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) {
 			continue
@@ -257,7 +258,7 @@ func clearPassiveOutputFiles(paths []string) error {
 			return err
 		}
 	}
-	for _, seen := range []map[string]bool{writtenReachable, writtenReachableDomains, writtenReachableIPs, writtenUnreachableDomains, writtenUnreachableIPs} {
+	for _, seen := range []map[string]bool{writtenReachable} {
 		for key := range seen {
 			path, _, _ := strings.Cut(key, "\x00")
 			for _, output := range paths {
@@ -274,6 +275,12 @@ func clearPassiveOutputFiles(paths []string) error {
 func clearPassiveOutputDirectory(dir string) error {
 	hostsMu.Lock()
 	defer hostsMu.Unlock()
+	for path := range statusFiles {
+		rel, err := filepath.Rel(dir, path)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			delete(statusFiles, path)
+		}
+	}
 	info, err := os.Lstat(dir)
 	if os.IsNotExist(err) {
 		return nil
@@ -296,7 +303,7 @@ func clearPassiveOutputDirectory(dir string) error {
 			return err
 		}
 	}
-	for _, seen := range []map[string]bool{writtenReachable, writtenReachableDomains, writtenReachableIPs, writtenUnreachableDomains, writtenUnreachableIPs} {
+	for _, seen := range []map[string]bool{writtenReachable} {
 		for key := range seen {
 			path, _, _ := strings.Cut(key, "\x00")
 			rel, err := filepath.Rel(dir, path)

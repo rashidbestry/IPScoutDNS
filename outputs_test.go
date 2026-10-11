@@ -184,11 +184,11 @@ func TestWindowsOutputsPreserveToolFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	appendUniqueLine(cfg.ReachableIPsFile, "1.1.1.1", writtenReachableIPs)
+	recordStatus(cfg.ReachableIPsFile, "", "1.1.1.1")
 	if err := clearPassiveOutputFiles(cfg.outputFiles()); err != nil {
 		t.Fatal(err)
 	}
-	appendUniqueLine(cfg.ReachableIPsFile, "1.1.1.1", writtenReachableIPs)
+	recordStatus(cfg.ReachableIPsFile, "", "1.1.1.1")
 	if err := copyRuntimeOutputs(context.Background(), cfg, destination); err != nil {
 		t.Fatal(err)
 	}
